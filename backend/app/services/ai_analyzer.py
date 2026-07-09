@@ -188,7 +188,13 @@ class AIAnalyzerService:
         self.db = db
         self.provider = provider or get_ai_provider()
 
-    def analyze_batch_needs_review(self, batch_id: int) -> AIAnalyzeSummary:
+    def analyze_batch_needs_review(
+        self,
+        batch_id: int,
+        *,
+        actor: str | None = None,
+        role: str | None = None,
+    ) -> AIAnalyzeSummary:
         batch = self.db.get(ImportBatch, batch_id)
         if batch is None:
             raise ValueError(f"Import batch {batch_id} not found")
@@ -205,13 +211,15 @@ class AIAnalyzerService:
             if (r.validation_status or "") == RecordStatus.NEEDS_REVIEW.value
         ]
         skipped = len(all_records) - len(needs_review)
+        audit_actor = actor or "system"
 
         write_audit_log(
             self.db,
-            actor="system",
+            actor=audit_actor,
             action="ai_analyze",
             entity_type="import_batch",
             entity_id=batch_id,
+            role=role,
             details={
                 "event": "ai_analyze_started",
                 "needs_review_records": len(needs_review),
@@ -235,10 +243,11 @@ class AIAnalyzerService:
 
         write_audit_log(
             self.db,
-            actor="system",
+            actor=audit_actor,
             action="ai_analyze",
             entity_type="import_batch",
             entity_id=batch_id,
+            role=role,
             details={"event": "ai_analyze_completed", **summary.to_dict()},
         )
         self.db.commit()

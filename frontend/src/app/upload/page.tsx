@@ -5,8 +5,11 @@ import { useState } from "react";
 import { ApiError, uploadExcel } from "@/lib/api";
 import type { ImportBatch } from "@/types/api";
 import { ErrorBox, StatusBadge, SuccessBox } from "@/components/Ui";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function UploadPage() {
+  const { auth } = useAuth();
+  const canUpload = Boolean(auth?.can_upload);
   const [file, setFile] = useState<File | null>(null);
   const [uploadedBy, setUploadedBy] = useState("ui-operator");
   const [batch, setBatch] = useState<ImportBatch | null>(null);
@@ -16,6 +19,10 @@ export default function UploadPage() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!canUpload) {
+      setError("Upload requires operator or admin role.");
+      return;
+    }
     if (!file) {
       setError("Choose a .xlsx file first.");
       return;
@@ -49,6 +56,12 @@ export default function UploadPage() {
       </div>
       <ErrorBox message={error} />
       <SuccessBox message={message} />
+      {!canUpload ? (
+        <div className="safety-note">
+          Upload is disabled for role <code>{auth?.role || "unknown"}</code>.
+          Requires operator or admin. Change token in Settings.
+        </div>
+      ) : null}
       <div className="panel">
         <form onSubmit={onSubmit}>
           <div className="field">
@@ -58,6 +71,7 @@ export default function UploadPage() {
               type="file"
               accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+              disabled={!canUpload}
             />
           </div>
           <div className="field">
@@ -66,9 +80,14 @@ export default function UploadPage() {
               id="uploaded_by"
               value={uploadedBy}
               onChange={(e) => setUploadedBy(e.target.value)}
+              disabled={!canUpload}
             />
           </div>
-          <button className="btn primary" type="submit" disabled={busy}>
+          <button
+            className="btn primary"
+            type="submit"
+            disabled={busy || !canUpload}
+          >
             {busy ? "Uploading…" : "Upload"}
           </button>
         </form>

@@ -59,6 +59,7 @@ class AISuggestionService:
         suggestion_id: int,
         *,
         reviewed_by: str | None = None,
+        role: str | None = None,
     ) -> AIRemediationSuggestion:
         suggestion = self.get_suggestion(suggestion_id)
         if suggestion.status == SuggestionStatus.CONVERTED.value:
@@ -76,6 +77,7 @@ class AISuggestionService:
             action="ai_suggestion_approve",
             entity_type="ai_remediation_suggestion",
             entity_id=suggestion.id,
+            role=role,
             details={"status": suggestion.status},
         )
         self.db.commit()
@@ -87,6 +89,7 @@ class AISuggestionService:
         suggestion_id: int,
         *,
         reviewed_by: str | None = None,
+        role: str | None = None,
     ) -> AIRemediationSuggestion:
         suggestion = self.get_suggestion(suggestion_id)
         if suggestion.status == SuggestionStatus.CONVERTED.value:
@@ -102,6 +105,7 @@ class AISuggestionService:
             action="ai_suggestion_reject",
             entity_type="ai_remediation_suggestion",
             entity_id=suggestion.id,
+            role=role,
             details={"status": suggestion.status},
         )
         self.db.commit()
@@ -116,6 +120,7 @@ class AISuggestionService:
         task_code: str | None = None,
         title: str | None = None,
         enable: bool = False,
+        role: str | None = None,
     ) -> tuple[AIRemediationSuggestion, RemediationCatalog]:
         """Create a disabled catalog entry from an approved suggestion.
 
@@ -176,6 +181,7 @@ class AISuggestionService:
             action="ai_suggestion_convert_to_catalog",
             entity_type="ai_remediation_suggestion",
             entity_id=suggestion.id,
+            role=role,
             details={
                 "catalog_id": catalog.id,
                 "task_code": catalog.task_code,

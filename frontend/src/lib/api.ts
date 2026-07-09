@@ -1,8 +1,8 @@
 /**
  * Browser API client for the compliance remediation backend.
  *
- * ADMIN_TOKEN is never hardcoded — operators paste it into sessionStorage
- * via the Settings page (or set NEXT_PUBLIC_ADMIN_TOKEN only for local lab).
+ * Role tokens (VIEWER/OPERATOR/APPROVER/ADMIN) are never hardcoded — paste into
+ * Settings sessionStorage (MVP-only, not production auth).
  * Backend URL comes from NEXT_PUBLIC_API_URL (default http://127.0.0.1:8000).
  */
 
@@ -21,6 +21,25 @@ import type {
 
 export const DEFAULT_API_BASE = "http://127.0.0.1:8000";
 export const TOKEN_STORAGE_KEY = "compliance_admin_token";
+
+export type AuthMe = {
+  role: string;
+  actor: string;
+  token_name: string;
+  mock_mode: boolean;
+  mvp_auth_warning: string;
+  can_upload: boolean;
+  can_validate: boolean;
+  can_generate_plan: boolean;
+  can_dry_run: boolean;
+  can_run: boolean;
+  can_approve_job: boolean;
+  can_reject_job: boolean;
+  can_approve_suggestion: boolean;
+  can_reject_suggestion: boolean;
+  can_convert_catalog: boolean;
+  can_ai_analyze: boolean;
+};
 
 export function getApiBase(): string {
   const fromEnv = process.env.NEXT_PUBLIC_API_URL?.trim();
@@ -85,7 +104,7 @@ export async function apiFetch<T>(
   if (!token) {
     throw new ApiError(
       401,
-      "ADMIN_TOKEN is not set. Open Settings and paste your token (never commit it).",
+      "API token is not set. Open Settings and paste a role token (never commit it).",
     );
   }
 
@@ -109,10 +128,16 @@ export async function apiFetch<T>(
   return (await res.json()) as T;
 }
 
+export async function fetchAuthMe(): Promise<AuthMe> {
+  return apiFetch("/auth/me");
+}
+
 export async function fetchRootMeta(): Promise<{
   mock_mode: string;
   phase: string;
   app: string;
+  role?: string;
+  actor?: string;
 }> {
   return apiFetch("/");
 }

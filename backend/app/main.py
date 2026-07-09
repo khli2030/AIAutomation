@@ -1,4 +1,4 @@
-"""FastAPI application entrypoint (Phase 1 + security hardening)."""
+"""FastAPI application entrypoint (Phase 1 + Phase 8A RBAC hardening)."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.router import api_router
-from app.auth import require_admin_token
+from app.auth import AuthContext, Role, resolve_token
 from app.config import get_settings
 
 settings = get_settings()
@@ -20,8 +20,10 @@ app = FastAPI(
     description=(
         "Internal Linux Compliance Remediation Platform. "
         "Excel Remediation text is never executed; only approved Ansible playbooks run. "
-        "Only /health is public; all other endpoints require ADMIN_TOKEN "
-        "(header X-Admin-Token or Authorization: Bearer)."
+        "Only /health is public; other endpoints require a role token "
+        "(VIEWER_TOKEN / OPERATOR_TOKEN / APPROVER_TOKEN / ADMIN_TOKEN) "
+        "via header X-Admin-Token or Authorization: Bearer. "
+        "MVP shared-token auth — not production SSO."
     ),
     version="0.1.0",
     debug=settings.debug,
@@ -36,8 +38,8 @@ app.add_middleware(
 )
 
 
-class AdminTokenMiddleware(BaseHTTPMiddleware):
-    """Reject unauthenticated requests to all paths except /health."""
+class RoleTokenMiddleware(BaseHTTPMiddleware):
+    """Authenticate all paths except /health; attach AuthContext to request.state."""
 
     async def dispatch(
         self,
@@ -49,7 +51,7 @@ class AdminTokenMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         try:
-            require_admin_token(
+            auth = resolve_token(
                 x_admin_token=request.headers.get("X-Admin-Token"),
                 authorization=request.headers.get("Authorization"),
             )
@@ -60,10 +62,11 @@ class AdminTokenMiddleware(BaseHTTPMiddleware):
                 media_type="application/json",
                 headers=dict(exc.headers or {}),
             )
+        request.state.auth = auth
         return await call_next(request)
 
 
-app.add_middleware(AdminTokenMiddleware)
+app.add_middleware(RoleTokenMiddleware)
 
 app.include_router(api_router)
 
@@ -84,12 +87,47 @@ app.include_router(needs_review_router)
 
 
 @app.get("/")
-def root() -> dict[str, str]:
+def root(request: Request) -> dict[str, str]:
+    auth: AuthContext | None = getattr(request.state, "auth", None)
     return {
         "app": settings.app_name,
         "env": settings.app_env,
         "docs": "/docs",
-        "phase": "7",
-        "auth": "ADMIN_TOKEN required for non-health endpoints",
+        "phase": "8a",
+        "auth": "MVP role tokens (VIEWER/OPERATOR/APPROVER/ADMIN) — not production SSO",
         "mock_mode": str(settings.mock_mode).lower(),
+        "role": auth.role.value if auth else "",
+        "actor": auth.actor if auth else "",
+    }
+
+
+@app.get("/auth/me")
+def auth_me(request: Request) -> dict[str, str | bool]:
+    """Return resolved role for the current token (Phase 8A)."""
+    auth: AuthContext | None = getattr(request.state, "auth", None)
+    if auth is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+    return {
+        "role": auth.role.value,
+        "actor": auth.actor,
+        "token_name": auth.token_name,
+        "mock_mode": bool(settings.mock_mode),
+        "mvp_auth_warning": (
+            "Shared role tokens in env/sessionStorage are MVP-only — "
+            "not production authentication."
+        ),
+        "can_upload": auth.role in {Role.OPERATOR, Role.ADMIN},
+        "can_validate": auth.role in {Role.OPERATOR, Role.ADMIN},
+        "can_generate_plan": auth.role in {Role.OPERATOR, Role.ADMIN},
+        "can_dry_run": auth.role in {Role.OPERATOR, Role.ADMIN},
+        "can_run": auth.role in {Role.OPERATOR, Role.ADMIN},
+        "can_approve_job": auth.role in {Role.APPROVER, Role.ADMIN},
+        "can_reject_job": auth.role in {Role.APPROVER, Role.ADMIN},
+        "can_approve_suggestion": auth.role in {Role.APPROVER, Role.ADMIN},
+        "can_reject_suggestion": auth.role in {Role.APPROVER, Role.ADMIN},
+        "can_convert_catalog": auth.role == Role.ADMIN,
+        "can_ai_analyze": auth.role in {Role.OPERATOR, Role.ADMIN},
     }

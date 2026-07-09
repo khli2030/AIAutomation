@@ -20,8 +20,11 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str = "change-me-in-production"
 
-    # Simple shared-token guard for non-health API routes (Phase 1 hardening).
-    # Set a strong value in .env — requests without this token are rejected.
+    # Phase 8A MVP role tokens (shared secrets — not production SSO).
+    # At least one token must be set; ADMIN_TOKEN alone remains valid (admin role).
+    viewer_token: str = ""
+    operator_token: str = ""
+    approver_token: str = ""
     admin_token: str = ""
 
     api_host: str = "0.0.0.0"

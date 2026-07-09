@@ -8,7 +8,7 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 >
 > This Phase 1 stack is for internal lab / controlled Ansible-host use only.
 > Do **not** treat it as production until you have:
-> - strong `ADMIN_TOKEN` / real authentication and authorization
+> - strong role tokens (`VIEWER_TOKEN` / `OPERATOR_TOKEN` / `APPROVER_TOKEN` / `ADMIN_TOKEN`) and later real SSO/OIDC
 > - TLS termination (reverse proxy) in front of the API
 > - reviewed, enabled playbooks only (stubs stay disabled)
 > - hardened secrets (no default DB passwords)
@@ -33,7 +33,7 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 | Database | PostgreSQL |
 | Queue | Redis + Celery |
 | Automation | Ansible + Ansible Runner (mock until Phase 6) |
-| Frontend | Next.js (Phase 7; placeholder for now) |
+| Frontend | Next.js (Phase 7+; Phase 8A MVP RBAC) |
 | Deploy | Docker Compose (internal) |
 
 ## Safety principles
@@ -47,15 +47,15 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 7.5 available:** UI E2E mock test (Playwright happy path + manual checklist in `docs/11-phase75-ui-e2e-mock-test.md`). Keep `MOCK_MODE=true`. No real Ansible.
+**Phase 8A available:** Minimal MVP RBAC with role tokens (`VIEWER_TOKEN` / `OPERATOR_TOKEN` / `APPROVER_TOKEN` / `ADMIN_TOKEN`). Keep `MOCK_MODE=true`. No real Ansible. See [`docs/12-phase8a-rbac.md`](docs/12-phase8a-rbac.md).
 
-Also includes Phase 1–7 (API + Next.js operator UI with MOCK_MODE banner).
+Also includes Phase 1–7.5 (API + Next.js operator UI + UI E2E mock).
 
 ## Quick start (internal Ansible host)
 
 ```bash
 cp .env.example .env
-# REQUIRED: set strong ADMIN_TOKEN, SECRET_KEY, POSTGRES_PASSWORD
+# REQUIRED: set role tokens (at least ADMIN_TOKEN), SECRET_KEY, POSTGRES_PASSWORD
 # Keep MOCK_MODE=true
 
 docker compose up -d --build db redis backend celery-worker
@@ -63,29 +63,29 @@ docker compose exec backend alembic upgrade head
 docker compose exec backend python -m app.db.seed_cli
 # seeds remediation_catalog + lab test assets (e2e-linux-01..)
 
-# Full mock E2E (requires Celery worker + ADMIN_TOKEN):
+# Full mock E2E (requires Celery worker + ADMIN_TOKEN or OPERATOR_TOKEN):
 ./scripts/e2e_mock_workflow.sh
 ```
 
-### Frontend (Phase 7)
+### Frontend (Phase 7 + 8A RBAC)
 
 ```bash
 cd frontend
 cp .env.example .env.local
 npm install
 npm run dev
-# open http://127.0.0.1:3000 → Settings → paste ADMIN_TOKEN
+# open http://127.0.0.1:3000 → Settings / Login → paste a role token
 ```
 
 Or: `docker compose --profile frontend up -d --build frontend`
 
-See [`frontend/README.md`](frontend/README.md) and [`docs/11-phase7-frontend.md`](docs/11-phase7-frontend.md).
+See [`frontend/README.md`](frontend/README.md), [`docs/11-phase7-frontend.md`](docs/11-phase7-frontend.md), and [`docs/12-phase8a-rbac.md`](docs/12-phase8a-rbac.md).
 
-Upload example (requires ADMIN_TOKEN):
+Upload example (requires OPERATOR_TOKEN or ADMIN_TOKEN):
 
 ```bash
 curl -X POST http://127.0.0.1:8000/imports/upload \
-  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -H "X-Admin-Token: $OPERATOR_TOKEN" \
   -F "file=@/path/to/compliance.xlsx" \
   -F "uploaded_by=operator1"
 ```
@@ -94,6 +94,13 @@ Health (public):
 
 ```bash
 curl -s http://127.0.0.1:8000/health
+```
+
+Who am I (any role token):
+
+```bash
+curl -s http://127.0.0.1:8000/auth/me \
+  -H "X-Admin-Token: $VIEWER_TOKEN"
 ```
 
 Authenticated call example:
@@ -123,4 +130,6 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 6. Ansible Runner dry-run / run (mock path; real path later when `MOCK_MODE=false`)
 6.5. E2E mock workflow test + CLI
 7. Frontend pages
-7.5. UI E2E mock test (Playwright + manual) ← **current gate before real Ansible**
+7.5. UI E2E mock test (Playwright + manual)
+8A. Minimal MVP RBAC (role tokens) ← **current gate before real Ansible**
+8. Real Ansible integration (not started — keep MOCK_MODE=true)

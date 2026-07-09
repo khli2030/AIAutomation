@@ -15,8 +15,10 @@ import {
 } from "@/lib/api";
 import type { ExecutionJob, JobResult } from "@/types/api";
 import { ErrorBox, StatusBadge, SuccessBox } from "@/components/Ui";
+import { useAuth } from "@/hooks/useAuth";
 
 function ApprovalsInner() {
+  const { auth } = useAuth();
   const params = useSearchParams();
   const [jobs, setJobs] = useState<ExecutionJob[]>([]);
   const [jobId, setJobId] = useState(params.get("jobId") || "");
@@ -79,7 +81,7 @@ function ApprovalsInner() {
     setBusy(true);
     setError(null);
     try {
-      const updated = await approveJob(job.id, "ui-operator");
+      const updated = await approveJob(job.id, auth?.actor || "ui-approver");
       setMessage(`Job #${updated.id} approved.`);
       await loadJob(job.id);
       await refreshJobs();
@@ -95,7 +97,7 @@ function ApprovalsInner() {
     setBusy(true);
     setError(null);
     try {
-      const updated = await rejectJob(job.id, "ui-operator");
+      const updated = await rejectJob(job.id, auth?.actor || "ui-approver");
       setMessage(`Job #${updated.id} rejected.`);
       await loadJob(job.id);
       await refreshJobs();
@@ -124,16 +126,25 @@ function ApprovalsInner() {
     }
   }
 
-  const canDryRun =
+  const statusAllowsDryRun =
     job &&
     (job.status === "waiting_dry_run" || job.status === "dry_run_failed");
-  const canApprove = job && job.status === "dry_run_success";
-  const canReject =
+  const statusAllowsApprove = job && job.status === "dry_run_success";
+  const statusAllowsReject =
     job &&
     ["waiting_dry_run", "dry_run_failed", "waiting_approval"].includes(
       job.status,
     );
-  const canRun = job && job.status === "approved";
+  const statusAllowsRun = job && job.status === "approved";
+
+  const roleCanDryRun = Boolean(auth?.can_dry_run);
+  const roleCanApprove = Boolean(auth?.can_approve_job);
+  const roleCanReject = Boolean(auth?.can_reject_job);
+  const roleCanRun = Boolean(auth?.can_run);
+
+  const canApprove = Boolean(statusAllowsApprove && roleCanApprove);
+  const canReject = Boolean(statusAllowsReject && roleCanReject);
+  const canRun = Boolean(statusAllowsRun && roleCanRun);
 
   return (
     <div>
@@ -172,15 +183,22 @@ function ApprovalsInner() {
           </p>
           <div className="safety-note">
             Buttons call MOCK_MODE API endpoints only. Approve is disabled until
-            dry_run_success. There is no playbook editor.
+            dry_run_success. Role <code>{auth?.role || "unknown"}</code>: dry-run/run
+            need operator/admin; approve/reject need approver/admin. There is no
+            playbook editor.
           </div>
           <div className="btn-row">
-            {canDryRun ? (
+            {statusAllowsDryRun ? (
               <button
                 className="btn primary"
                 type="button"
-                disabled={busy}
+                disabled={busy || !roleCanDryRun}
                 onClick={() => void onDryRun()}
+                title={
+                  roleCanDryRun
+                    ? "Run mock dry-run"
+                    : "Requires operator or admin"
+                }
               >
                 Run mock dry-run
               </button>
@@ -190,6 +208,11 @@ function ApprovalsInner() {
               type="button"
               disabled={busy || !canApprove}
               onClick={() => void onApprove()}
+              title={
+                roleCanApprove
+                  ? "Approve job"
+                  : "Requires approver or admin"
+              }
             >
               Approve
             </button>
@@ -198,6 +221,11 @@ function ApprovalsInner() {
               type="button"
               disabled={busy || !canReject}
               onClick={() => void onReject()}
+              title={
+                roleCanReject
+                  ? "Reject job"
+                  : "Requires approver or admin"
+              }
             >
               Reject
             </button>
@@ -206,7 +234,11 @@ function ApprovalsInner() {
               type="button"
               disabled={busy || !canRun}
               onClick={() => void onRun()}
-              title="Mock apply only after approval"
+              title={
+                roleCanRun
+                  ? "Mock apply only after approval"
+                  : "Requires operator or admin"
+              }
             >
               Run mock execution
             </button>

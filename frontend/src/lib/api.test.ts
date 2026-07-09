@@ -21,6 +21,10 @@ describe("api client safety", () => {
       "utf8",
     );
     expect(src).not.toMatch(/ADMIN_TOKEN\s*=\s*["'][^"']+["']/);
-    expect(src).toContain('enable: false');
+    expect(src).not.toMatch(/VIEWER_TOKEN\s*=\s*["'][^"']+["']/);
+    expect(src).not.toMatch(/OPERATOR_TOKEN\s*=\s*["'][^"']+["']/);
+    expect(src).not.toMatch(/APPROVER_TOKEN\s*=\s*["'][^"']+["']/);
+    expect(src).toContain("enable: false");
+    expect(src).toContain("/auth/me");
   });
 });

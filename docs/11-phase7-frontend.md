@@ -19,12 +19,12 @@ No Ansible / runner / subprocess / SSH changes. `MOCK_MODE` default remains `tru
 
 See [`frontend/README.md`](../frontend/README.md).
 
-## Auth note (MVP)
+## Auth note (MVP — Phase 8A)
 
-`ADMIN_TOKEN` in browser `sessionStorage` (or optional gitignored
-`NEXT_PUBLIC_ADMIN_TOKEN`) is **MVP / lab-only**. It is not production
-authentication. Production deployments need stronger auth (SSO/OIDC/RBAC) and
-TLS — do not treat the shared admin token as a security boundary.
+Role tokens (`VIEWER_TOKEN` / `OPERATOR_TOKEN` / `APPROVER_TOKEN` / `ADMIN_TOKEN`)
+in browser `sessionStorage` (or optional gitignored `NEXT_PUBLIC_ADMIN_TOKEN`)
+are **MVP / lab-only**. They are not production authentication. See
+[`docs/12-phase8a-rbac.md`](12-phase8a-rbac.md).
 
 ## Explicit non-goals
 

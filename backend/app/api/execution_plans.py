@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.auth import READ_ROLES, AuthContext, require_roles
 from app.db.session import get_db
 from app.models.execution_plan import ExecutionPlan
 from app.schemas.dashboard import ExecutionPlanListItem, ExecutionPlanListResponse
@@ -26,6 +27,7 @@ def list_execution_plans(
     offset: int = Query(default=0, ge=0),
     batch_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> ExecutionPlanListResponse:
     """List execution plans newest-first (Phase 7)."""
     filters = []
@@ -66,6 +68,7 @@ def list_execution_plans(
 def get_execution_plan(
     plan_id: int,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> ExecutionPlanResponse:
     """GET /execution-plans/{plan_id}."""
     service = PlanQueryService(db)
@@ -89,6 +92,7 @@ def get_execution_plan(
 def list_plan_jobs(
     plan_id: int,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> ExecutionJobListResponse:
     """GET /execution-plans/{plan_id}/jobs."""
     service = PlanQueryService(db)
