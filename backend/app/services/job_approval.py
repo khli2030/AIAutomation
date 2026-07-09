@@ -52,6 +52,7 @@ class JobApprovalService:
         job_id: int,
         *,
         reviewed_by: str | None = None,
+        role: str | None = None,
     ) -> ExecutionJob:
         job = self.get_job(job_id)
 
@@ -76,6 +77,7 @@ class JobApprovalService:
             action="approve",
             entity_type="execution_job",
             entity_id=job.id,
+            role=role,
             details={
                 "status": job.status,
                 "task_code": job.task_code,
@@ -91,6 +93,7 @@ class JobApprovalService:
         job_id: int,
         *,
         reviewed_by: str | None = None,
+        role: str | None = None,
     ) -> ExecutionJob:
         job = self.get_job(job_id)
 
@@ -111,6 +114,7 @@ class JobApprovalService:
             action="reject",
             entity_type="execution_job",
             entity_id=job.id,
+            role=role,
             details={
                 "status": job.status,
                 "task_code": job.task_code,

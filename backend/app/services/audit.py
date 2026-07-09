@@ -18,13 +18,27 @@ def write_audit_log(
     entity_type: str,
     entity_id: str | int,
     details: dict[str, Any] | str | None = None,
+    role: str | None = None,
     commit: bool = False,
 ) -> AuditLog:
-    """Persist an audit event. Caller controls transaction unless commit=True."""
+    """Persist an audit event. Caller controls transaction unless commit=True.
+
+    ``role`` is merged into details as ``auth_role`` (Phase 8A) so actor + role
+    are queryable without a schema migration. Production may add a dedicated column later.
+    """
     if isinstance(details, dict):
-        details_text: str | None = json.dumps(details, ensure_ascii=False, default=str)
+        payload: dict[str, Any] = dict(details)
+    elif details is None:
+        payload = {}
     else:
-        details_text = details
+        payload = {"message": details}
+
+    if role:
+        payload.setdefault("auth_role", role)
+
+    details_text: str | None = (
+        json.dumps(payload, ensure_ascii=False, default=str) if payload else None
+    )
 
     entry = AuditLog(
         actor=actor or "system",

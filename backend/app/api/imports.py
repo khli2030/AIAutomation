@@ -6,6 +6,12 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.auth import (
+    AuthContext,
+    OPERATOR_ROLES,
+    READ_ROLES,
+    require_roles,
+)
 from app.config import Settings, get_settings
 from app.db.session import get_db
 from app.models.import_batch import ImportBatch
@@ -40,6 +46,7 @@ def list_import_batches(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> ImportBatchListResponse:
     """List import batches newest-first (Phase 7 dashboard / imports index)."""
     total = db.scalar(select(func.count()).select_from(ImportBatch)) or 0
@@ -67,6 +74,7 @@ def upload_excel(
     uploaded_by: str | None = Form(default=None),
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    auth: AuthContext = require_roles(*OPERATOR_ROLES),
 ) -> ImportUploadResponse:
     """Accept .xlsx upload, store under uploads/{batch_id}/, queue Celery parse.
 
@@ -75,13 +83,15 @@ def upload_excel(
     """
     try:
         original = file.filename or "upload.xlsx"
+        # Audit identity comes from the authenticated token, not the form field.
+        _ = uploaded_by
         batch = create_import_batch_record(
             db,
             original_filename=original,
-            uploaded_by=uploaded_by,
+            uploaded_by=auth.actor,
         )
         save_upload_for_batch(file, batch=batch, settings=settings)
-        batch = finalize_upload_audit(db, batch)
+        batch = finalize_upload_audit(db, batch, role=auth.role.value)
     except ImportUploadError as exc:
         db.rollback()
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -101,7 +111,11 @@ def upload_excel(
 
 
 @router.get("/{batch_id}", response_model=ImportBatchResponse)
-def get_import_batch(batch_id: int, db: Session = Depends(get_db)) -> ImportBatchResponse:
+def get_import_batch(
+    batch_id: int,
+    db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
+) -> ImportBatchResponse:
     batch = db.get(ImportBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import batch not found")
@@ -117,6 +131,7 @@ def list_import_records(
     task_code: str | None = Query(default=None),
     device_name: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> RawImportRecordListResponse:
     batch = db.get(ImportBatch, batch_id)
     if batch is None:
@@ -159,6 +174,7 @@ def list_import_records(
 def validate_import_batch(
     batch_id: int,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*OPERATOR_ROLES),
 ) -> ValidationSummaryResponse:
     """Validate + rule-based classify raw_import_records for a batch (Phase 3).
 
@@ -169,7 +185,9 @@ def validate_import_batch(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import batch not found")
 
     try:
-        summary = RecordValidationService(db).validate_batch(batch_id)
+        summary = RecordValidationService(db).validate_batch(
+            batch_id, actor=auth.actor, role=auth.role.value
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -184,6 +202,7 @@ def validate_import_batch(
 def ai_analyze_needs_review(
     batch_id: int,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*OPERATOR_ROLES),
 ) -> AIAnalyzeSummaryResponse:
     """Analyze NEEDS_REVIEW records only; persist draft AI suggestions (Phase 4).
 
@@ -210,6 +229,7 @@ def generate_plan(
     batch_id: int,
     created_by: str | None = Query(default=None),
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*OPERATOR_ROLES),
 ) -> GeneratePlanResponse:
     """Generate execution plan from READY_FOR_PLAN records only (Phase 5).
 
@@ -221,7 +241,11 @@ def generate_plan(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import batch not found")
 
     try:
-        result = PlanGeneratorService(db).generate_plan(batch_id, created_by=created_by)
+        # Prefer authenticated actor over query param for audit identity.
+        _ = created_by
+        result = PlanGeneratorService(db).generate_plan(
+            batch_id, created_by=auth.actor, role=auth.role.value
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

@@ -94,6 +94,7 @@ class PlanGeneratorService:
         batch_id: int,
         *,
         created_by: str | None = None,
+        role: str | None = None,
     ) -> PlanGenerationResult:
         batch = self.db.get(ImportBatch, batch_id)
         if batch is None:
@@ -123,6 +124,7 @@ class PlanGeneratorService:
             action="generate_plan",
             entity_type="execution_plan",
             entity_id=plan.id,
+            role=role,
             details={
                 "event": "generate_plan_started",
                 "batch_id": batch_id,
@@ -240,6 +242,7 @@ class PlanGeneratorService:
             action="generate_plan",
             entity_type="execution_plan",
             entity_id=plan.id,
+            role=role,
             details={
                 "event": "generate_plan_completed",
                 "batch_id": batch_id,

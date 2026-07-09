@@ -95,13 +95,19 @@ def save_upload_for_batch(
     return stored_path
 
 
-def finalize_upload_audit(db: Session, batch: ImportBatch) -> ImportBatch:
+def finalize_upload_audit(
+    db: Session,
+    batch: ImportBatch,
+    *,
+    role: str | None = None,
+) -> ImportBatch:
     write_audit_log(
         db,
         actor=batch.uploaded_by or "anonymous",
         action="upload",
         entity_type="import_batch",
         entity_id=batch.id,
+        role=role,
         details={
             "original_filename": batch.original_filename,
             "stored_path": batch.stored_path,

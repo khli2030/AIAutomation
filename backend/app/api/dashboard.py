@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
+from app.auth import READ_ROLES, AuthContext, require_roles
 from app.config import Settings, get_settings
 from app.db.session import get_db
 from app.schemas.dashboard import DashboardSummaryResponse
@@ -15,6 +16,7 @@ router = APIRouter()
 def dashboard_summary(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> DashboardSummaryResponse:
     """Aggregated import / record / job counters for the operator dashboard.
 

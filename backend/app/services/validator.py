@@ -81,7 +81,13 @@ class RecordValidationService:
     def __init__(self, db: Session) -> None:
         self.db = db
 
-    def validate_batch(self, batch_id: int) -> ValidationSummary:
+    def validate_batch(
+        self,
+        batch_id: int,
+        *,
+        actor: str = "system",
+        role: str | None = None,
+    ) -> ValidationSummary:
         batch = self.db.get(ImportBatch, batch_id)
         if batch is None:
             raise ValueError(f"Import batch {batch_id} not found")
@@ -98,10 +104,11 @@ class RecordValidationService:
 
         write_audit_log(
             self.db,
-            actor="system",
+            actor=actor,
             action="classify",
             entity_type="import_batch",
             entity_id=batch_id,
+            role=role,
             details={"event": "validate_started", "record_count": len(records)},
         )
 
@@ -138,10 +145,11 @@ class RecordValidationService:
 
         write_audit_log(
             self.db,
-            actor="system",
+            actor=actor,
             action="classify",
             entity_type="import_batch",
             entity_id=batch_id,
+            role=role,
             details={"event": "validate_completed", **summary.to_dict()},
         )
         self.db.commit()

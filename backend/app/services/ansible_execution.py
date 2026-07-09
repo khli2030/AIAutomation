@@ -91,21 +91,44 @@ class AnsibleExecutionService:
         self.db = db
         self.settings = settings or get_settings()
 
-    def dry_run_job(self, job_id: int) -> JobExecutionSummary:
+    def dry_run_job(
+        self,
+        job_id: int,
+        *,
+        actor: str = "system",
+        role: str | None = None,
+    ) -> JobExecutionSummary:
         """Run check-mode (or mock equivalent) for an execution job.
 
         Allowed only when job status is waiting_dry_run.
         """
-        return self._execute(job_id=job_id, mode="dry_run")
+        return self._execute(
+            job_id=job_id, mode="dry_run", actor=actor, role=role
+        )
 
-    def run_job(self, job_id: int) -> JobExecutionSummary:
+    def run_job(
+        self,
+        job_id: int,
+        *,
+        actor: str = "system",
+        role: str | None = None,
+    ) -> JobExecutionSummary:
         """Run apply-mode (or mock equivalent) for an approved execution job.
 
         Allowed only when job status is approved.
         """
-        return self._execute(job_id=job_id, mode="apply")
+        return self._execute(
+            job_id=job_id, mode="apply", actor=actor, role=role
+        )
 
-    def _execute(self, *, job_id: int, mode: ExecutionMode) -> JobExecutionSummary:
+    def _execute(
+        self,
+        *,
+        job_id: int,
+        mode: ExecutionMode,
+        actor: str = "system",
+        role: str | None = None,
+    ) -> JobExecutionSummary:
         job = self._load_job(job_id)
         self._assert_job_status_allows(job=job, mode=mode)
         catalog = self._assert_catalog_allows(job.task_code)
@@ -113,9 +136,11 @@ class AnsibleExecutionService:
         # Branch FIRST on MOCK_MODE so the real adapter is never imported/called.
         if self.settings.mock_mode:
             self._assert_mock_mode_safe()
-            return self._execute_mock(job=job, mode=mode, catalog=catalog)
+            return self._execute_mock(
+                job=job, mode=mode, catalog=catalog, actor=actor, role=role
+            )
 
-        return self._execute_real(job=job, mode=mode)
+        return self._execute_real(job=job, mode=mode, actor=actor, role=role)
 
     def _assert_job_status_allows(self, *, job: ExecutionJob, mode: ExecutionMode) -> None:
         if mode == "dry_run":
@@ -197,6 +222,8 @@ class AnsibleExecutionService:
         job: ExecutionJob,
         mode: ExecutionMode,
         catalog: RemediationCatalog,
+        actor: str = "system",
+        role: str | None = None,
     ) -> JobExecutionSummary:
         # Re-check at entry so this method is never a backdoor into real execution.
         if not self.settings.mock_mode:
@@ -221,10 +248,11 @@ class AnsibleExecutionService:
 
         write_audit_log(
             self.db,
-            actor="system",
+            actor=actor,
             action="dry_run" if mode == "dry_run" else "run",
             entity_type="execution_job",
             entity_id=job.id,
+            role=role,
             details={
                 "event": "started",
                 "mock_mode": True,
@@ -257,6 +285,8 @@ class AnsibleExecutionService:
                 mode=mode,
                 outcomes=[],
                 mock_mode=True,
+                actor=actor,
+                role=role,
             )
             self.db.commit()
             return summary
@@ -291,6 +321,8 @@ class AnsibleExecutionService:
             mode=mode,
             outcomes=outcomes,
             mock_mode=True,
+            actor=actor,
+            role=role,
         )
         self.db.commit()
         # Final safety check after mock work — still no forbidden modules.
@@ -406,6 +438,8 @@ class AnsibleExecutionService:
         mode: ExecutionMode,
         outcomes: list[tuple[ExecutionJobTarget, HostMockOutcome]],
         mock_mode: bool,
+        actor: str = "system",
+        role: str | None = None,
     ) -> JobExecutionSummary:
         now = datetime.now(UTC)
         hosts_total = len(outcomes)
@@ -442,10 +476,11 @@ class AnsibleExecutionService:
 
         write_audit_log(
             self.db,
-            actor="system",
+            actor=actor,
             action="dry_run" if mode == "dry_run" else "run",
             entity_type="execution_job",
             entity_id=job.id,
+            role=role,
             details={
                 "event": "completed",
                 "mock_mode": mock_mode,
@@ -480,7 +515,12 @@ class AnsibleExecutionService:
     # ------------------------------------------------------------------
 
     def _execute_real(
-        self, *, job: ExecutionJob, mode: ExecutionMode
+        self,
+        *,
+        job: ExecutionJob,
+        mode: ExecutionMode,
+        actor: str = "system",
+        role: str | None = None,
     ) -> JobExecutionSummary:
         """Real Runner path. Hard-blocked while MOCK_MODE=true."""
         if self.settings.mock_mode:
@@ -497,10 +537,11 @@ class AnsibleExecutionService:
 
         write_audit_log(
             self.db,
-            actor="system",
+            actor=actor,
             action="dry_run" if mode == "dry_run" else "execute",
             entity_type="execution_job",
             entity_id=job.id,
+            role=role,
             details={
                 "event": "blocked",
                 "mock_mode": False,

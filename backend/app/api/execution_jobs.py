@@ -6,6 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.auth import (
+    APPROVER_ROLES,
+    AuthContext,
+    OPERATOR_ROLES,
+    READ_ROLES,
+    require_roles,
+)
 from app.constants.job_result_type import JobResultType
 from app.db.session import get_db
 from app.models.execution_job import ExecutionJob
@@ -61,6 +68,7 @@ def list_execution_jobs(
     status_filter: str | None = Query(default=None, alias="status"),
     plan_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> ExecutionJobListAllResponse:
     """List execution jobs newest-first (Phase 7 approvals / jobs pages)."""
     filters = []
@@ -91,6 +99,7 @@ def list_execution_jobs(
 def get_execution_job(
     job_id: int,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> ExecutionJobResponse:
     job = db.get(ExecutionJob, job_id)
     if job is None:
@@ -102,13 +111,16 @@ def get_execution_job(
 def dry_run_job(
     job_id: int,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*OPERATOR_ROLES),
 ) -> JobExecutionSummaryResponse:
     """Mock dry-run via AnsibleExecutionService (MOCK_MODE path only for MVP).
 
     Allowed only when job status=waiting_dry_run. Never uses AI draft playbooks.
     """
     try:
-        summary = AnsibleExecutionService(db).dry_run_job(job_id)
+        summary = AnsibleExecutionService(db).dry_run_job(
+            job_id, actor=auth.actor, role=auth.role.value
+        )
     except AnsibleExecutionError as exc:
         detail = str(exc)
         code = (
@@ -125,11 +137,15 @@ def approve_job(
     job_id: int,
     body: JobReviewRequest | None = None,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*APPROVER_ROLES),
 ) -> ExecutionJobResponse:
     """Approve only when status is dry_run_success. waiting_dry_run → 400."""
     payload = body or JobReviewRequest()
+    _ = payload  # reviewed_by from body ignored; auth actor is source of truth
     try:
-        job = JobApprovalService(db).approve(job_id, reviewed_by=payload.reviewed_by)
+        job = JobApprovalService(db).approve(
+            job_id, reviewed_by=auth.actor, role=auth.role.value
+        )
     except JobApprovalError as exc:
         detail = str(exc)
         code = (
@@ -146,11 +162,15 @@ def reject_job(
     job_id: int,
     body: JobReviewRequest | None = None,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*APPROVER_ROLES),
 ) -> ExecutionJobResponse:
     """Reject waiting_dry_run / dry_run_failed / waiting_approval jobs. No execution."""
     payload = body or JobReviewRequest()
+    _ = payload
     try:
-        job = JobApprovalService(db).reject(job_id, reviewed_by=payload.reviewed_by)
+        job = JobApprovalService(db).reject(
+            job_id, reviewed_by=auth.actor, role=auth.role.value
+        )
     except JobApprovalError as exc:
         detail = str(exc)
         code = (
@@ -166,13 +186,16 @@ def reject_job(
 def run_job(
     job_id: int,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*OPERATOR_ROLES),
 ) -> JobExecutionSummaryResponse:
     """Mock apply via AnsibleExecutionService after approval.
 
     Allowed only when job status=approved. Never uses AI draft playbooks.
     """
     try:
-        summary = AnsibleExecutionService(db).run_job(job_id)
+        summary = AnsibleExecutionService(db).run_job(
+            job_id, actor=auth.actor, role=auth.role.value
+        )
     except AnsibleExecutionError as exc:
         detail = str(exc)
         code = (
@@ -192,6 +215,7 @@ def get_job_results(
         description="Filter by result_type: dry_run or run. Omit to return both.",
     ),
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> JobResultsListResponse:
     """GET /execution-jobs/{job_id}/results — per-host mock/real results.
 

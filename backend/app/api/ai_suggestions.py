@@ -8,6 +8,13 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.auth import (
+    ADMIN_ONLY,
+    APPROVER_ROLES,
+    AuthContext,
+    READ_ROLES,
+    require_roles,
+)
 from app.db.session import get_db
 from app.schemas.ai_suggestions import (
     AISuggestionListResponse,
@@ -28,6 +35,7 @@ def list_ai_suggestions(
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> AISuggestionListResponse:
     """GET /ai-suggestions — list draft/review suggestions (never executable)."""
     items, total = AISuggestionService(db).list_suggestions(
@@ -47,6 +55,7 @@ def list_ai_suggestions(
 def get_ai_suggestion(
     suggestion_id: int,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
 ) -> AISuggestionResponse:
     """GET /ai-suggestions/{suggestion_id}."""
     try:
@@ -61,13 +70,16 @@ def approve_suggestion(
     suggestion_id: int,
     body: ReviewActionRequest | None = None,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*APPROVER_ROLES),
 ) -> AISuggestionResponse:
     """Approve changes suggestion status only — does not execute or add to catalog."""
     payload = body or ReviewActionRequest()
+    _ = payload
     try:
         suggestion = AISuggestionService(db).approve(
             suggestion_id,
-            reviewed_by=payload.reviewed_by,
+            reviewed_by=auth.actor,
+            role=auth.role.value,
         )
     except AISuggestionError as exc:
         detail = str(exc)
@@ -85,13 +97,16 @@ def reject_suggestion(
     suggestion_id: int,
     body: ReviewActionRequest | None = None,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*APPROVER_ROLES),
 ) -> AISuggestionResponse:
     """Reject changes suggestion status only — does not execute."""
     payload = body or ReviewActionRequest()
+    _ = payload
     try:
         suggestion = AISuggestionService(db).reject(
             suggestion_id,
-            reviewed_by=payload.reviewed_by,
+            reviewed_by=auth.actor,
+            role=auth.role.value,
         )
     except AISuggestionError as exc:
         detail = str(exc)
@@ -112,16 +127,18 @@ def convert_suggestion_to_catalog(
     suggestion_id: int,
     body: ConvertToCatalogRequest | None = None,
     db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*ADMIN_ONLY),
 ) -> ConvertToCatalogResponse:
     """Human-reviewed conversion only — catalog entry disabled by default; never execute AI draft."""
     payload = body or ConvertToCatalogRequest()
     try:
         suggestion, catalog = AISuggestionService(db).convert_to_catalog(
             suggestion_id,
-            reviewed_by=payload.reviewed_by,
+            reviewed_by=auth.actor,
             task_code=payload.task_code,
             title=payload.title,
             enable=payload.enable,
+            role=auth.role.value,
         )
     except AISuggestionError as exc:
         detail = str(exc)
