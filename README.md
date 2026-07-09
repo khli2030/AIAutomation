@@ -47,7 +47,9 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 1 + security hardening + MOCK_MODE design:** Compose (loopback), `ADMIN_TOKEN` guard, models/Alembic/Celery, Ansible layout, `AnsibleExecutionService` with safe mock execution path.
+**Phase 2 (this branch):** Excel `.xlsx` upload, Celery chunked parse (1000), raw record persistence, batch counters. Classification and plans are not included yet.
+
+Also includes Phase 1 hardening + `MOCK_MODE` (default true — no real Ansible).
 
 ## Quick start (internal Ansible host)
 
@@ -59,6 +61,15 @@ cp .env.example .env
 docker compose up -d --build db redis backend celery-worker
 docker compose exec backend alembic upgrade head
 docker compose exec backend python -m app.db.seed_cli
+```
+
+Upload example (requires ADMIN_TOKEN):
+
+```bash
+curl -X POST http://127.0.0.1:8000/imports/upload \
+  -H "X-Admin-Token: $ADMIN_TOKEN" \
+  -F "file=@/path/to/compliance.xlsx" \
+  -F "uploaded_by=operator1"
 ```
 
 Health (public):
@@ -86,8 +97,8 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 
 ## Phases
 
-1. Structure + compose + models + Celery ← **current (hardened + MOCK_MODE)**
-2. Excel upload + chunked parse
+1. Structure + compose + models + Celery
+2. Excel upload + chunked parse ← **current**
 3. Validation + classifier + asset match
 4. AI analyzer interface + suggestions
 5. Execution plans + approval + audit

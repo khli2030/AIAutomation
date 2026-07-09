@@ -47,7 +47,8 @@ class Settings(BaseSettings):
     runner_private_data_dir: str = "/var/lib/compliance/ansible_private_data"
     tmp_inventory_dir: str = "/var/lib/compliance/tmp_inventories"
 
-    excel_chunk_size: int = 500
+    # Phase 2 default chunk size for Excel insert batches.
+    excel_chunk_size: int = 1000
     job_batch_size: int = 75
 
     # When True, AnsibleExecutionService never calls ansible-runner or shell.
