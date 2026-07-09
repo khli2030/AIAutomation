@@ -1,11 +1,14 @@
-"""Execution plan endpoints — Phase 5 (no Ansible execution)."""
+"""Execution plan endpoints — Phase 5 + Phase 7 list (no Ansible execution)."""
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.execution_plan import ExecutionPlan
+from app.schemas.dashboard import ExecutionPlanListItem, ExecutionPlanListResponse
 from app.schemas.plans import (
     ExecutionJobListResponse,
     ExecutionJobResponse,
@@ -14,6 +17,49 @@ from app.schemas.plans import (
 from app.services.plan_query import PlanQueryError, PlanQueryService
 
 router = APIRouter()
+
+
+@router.get("", response_model=ExecutionPlanListResponse)
+@router.get("/", response_model=ExecutionPlanListResponse, include_in_schema=False)
+def list_execution_plans(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    batch_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> ExecutionPlanListResponse:
+    """List execution plans newest-first (Phase 7)."""
+    filters = []
+    if batch_id is not None:
+        filters.append(ExecutionPlan.batch_id == batch_id)
+
+    count_q = select(func.count()).select_from(ExecutionPlan)
+    query = select(ExecutionPlan)
+    if filters:
+        count_q = count_q.where(*filters)
+        query = query.where(*filters)
+
+    total = db.scalar(count_q) or 0
+    plans = db.scalars(
+        query.order_by(ExecutionPlan.id.desc()).offset(offset).limit(limit)
+    ).all()
+
+    service = PlanQueryService(db)
+    items: list[ExecutionPlanListItem] = []
+    for plan in plans:
+        items.append(
+            ExecutionPlanListItem(
+                id=plan.id,
+                batch_id=plan.batch_id,
+                status=plan.status,
+                created_by=plan.created_by,
+                created_at=plan.created_at,
+                job_count=service.count_jobs(plan.id),
+                target_count=service.count_targets(plan.id),
+            )
+        )
+    return ExecutionPlanListResponse(
+        total=int(total), limit=limit, offset=offset, items=items
+    )
 
 
 @router.get("/{plan_id}", response_model=ExecutionPlanResponse)

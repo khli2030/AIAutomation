@@ -47,16 +47,16 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 6.5 available:** end-to-end mock workflow test + `scripts/e2e_mock_workflow.sh` (seed → upload → parse → validate → plan → dry-run → approve → run). Keep `MOCK_MODE=true`. No frontend or real Ansible until this E2E passes.
+**Phase 7 available:** Next.js operator UI (dashboard, upload, imports, records, needs-review, AI suggestions, plans, approvals, job results) with a persistent **MOCK_MODE** banner. Backend adds list/dashboard APIs. Keep `MOCK_MODE=true`. No real Ansible.
 
-Also includes Phase 1–6 (upload/parse/validate/AI drafts/plans/mock dry-run/run) and `MOCK_MODE` (default true — no real Ansible).
+Also includes Phase 1–6.5 (upload/parse/validate/AI drafts/plans/mock dry-run/run + E2E mock workflow).
 
 ## Quick start (internal Ansible host)
 
 ```bash
 cp .env.example .env
 # REQUIRED: set strong ADMIN_TOKEN, SECRET_KEY, POSTGRES_PASSWORD
-# Keep MOCK_MODE=true until Phase 6 on the Ansible control server
+# Keep MOCK_MODE=true
 
 docker compose up -d --build db redis backend celery-worker
 docker compose exec backend alembic upgrade head
@@ -66,6 +66,20 @@ docker compose exec backend python -m app.db.seed_cli
 # Full mock E2E (requires Celery worker + ADMIN_TOKEN):
 ./scripts/e2e_mock_workflow.sh
 ```
+
+### Frontend (Phase 7)
+
+```bash
+cd frontend
+cp .env.example .env.local
+npm install
+npm run dev
+# open http://127.0.0.1:3000 → Settings → paste ADMIN_TOKEN
+```
+
+Or: `docker compose --profile frontend up -d --build frontend`
+
+See [`frontend/README.md`](frontend/README.md) and [`docs/11-phase7-frontend.md`](docs/11-phase7-frontend.md).
 
 Upload example (requires ADMIN_TOKEN):
 
@@ -107,5 +121,5 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 4. AI analyzer interface + suggestions
 5. Execution plans + approval + audit
 6. Ansible Runner dry-run / run (mock path; real path later when `MOCK_MODE=false`)
-6.5. E2E mock workflow test + CLI ← **current gate**
-7. Frontend pages
+6.5. E2E mock workflow test + CLI
+7. Frontend pages ← **current**

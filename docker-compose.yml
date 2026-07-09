@@ -99,8 +99,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8000}
     environment:
-      NEXT_PUBLIC_API_URL: http://127.0.0.1:8000
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8000}
+      # ADMIN_TOKEN must never be baked into the image; operators paste it in Settings.
     ports:
       - "127.0.0.1:3000:3000"
     depends_on:
