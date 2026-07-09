@@ -55,7 +55,14 @@ Compose sets `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000` (browser → host loopb
 ```bash
 npm test
 npm run build
+
+# Phase 7.5 UI E2E (Playwright + mocked MOCK_MODE API — no real Ansible)
+npx playwright install chromium   # once
+npm run test:e2e
 ```
+
+Full manual UI workflow (real backend + frontend): see
+[`docs/11-phase75-ui-e2e-mock-test.md`](../docs/11-phase75-ui-e2e-mock-test.md).
 
 ## Manual test checklist
 
