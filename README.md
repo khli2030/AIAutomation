@@ -20,7 +20,7 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 | Setting | Behaviour |
 |---------|-----------|
-| `MOCK_MODE=true` (default) | `AnsibleExecutionService` generates fake per-host results. **No** `ansible-runner`, **no** shell. |
+| `MOCK_MODE=true` (default) | Fake per-host results only. **No** `ansible-runner`, **no** `ansible-playbook`, **no** `subprocess`/shell, **no** SSH. |
 | `MOCK_MODE=false` | Reserved for the internal Ansible control server. Real Runner is **not implemented yet** and will refuse to run until Phase 6. |
 
 **Real Ansible execution happens only after deploying to the internal Ansible control server.** See [`DEPLOYMENT.md`](DEPLOYMENT.md).

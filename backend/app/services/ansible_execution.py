@@ -1,17 +1,19 @@
 """Ansible execution facade.
 
-MOCK_MODE=true  → fake realistic per-host results; never runs ansible-runner/shell.
+MOCK_MODE=true  → fake realistic per-host results; never runs ansible-runner/shell/SSH.
 MOCK_MODE=false → real Ansible Runner path (not implemented yet; see Phase 6).
 
-Safety:
-- Never executes Excel Remediation text.
-- Never executes AI-generated playbooks.
-- Only catalog-backed playbooks will be allowed when real mode is implemented.
+Hard guarantee when MOCK_MODE=true:
+- No import of ansible_runner / paramiko
+- No subprocess / os.system / shell
+- No ansible-playbook invocation
+- Real adapter module is not imported
 """
 
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -31,9 +33,25 @@ logger = logging.getLogger(__name__)
 
 ExecutionMode = Literal["dry_run", "apply"]
 
+# Modules that must never be loaded/used while MOCK_MODE=true.
+_FORBIDDEN_MODULES_WHEN_MOCK: frozenset[str] = frozenset(
+    {
+        "ansible_runner",
+        "ansible.executor",
+        "ansible.cli",
+        "paramiko",
+        "fabric",
+        "invoke",
+    }
+)
+
 
 class AnsibleExecutionError(Exception):
     """Raised when a job cannot be executed (missing job, policy, etc.)."""
+
+
+class MockModeViolationError(AnsibleExecutionError):
+    """Raised if a real-execution code path is entered while MOCK_MODE=true."""
 
 
 @dataclass(frozen=True)
@@ -79,10 +97,32 @@ class AnsibleExecutionService:
         job = self._load_job(job_id)
         self._assert_catalog_allows(job.task_code)
 
+        # Branch FIRST on MOCK_MODE so the real adapter is never imported/called.
         if self.settings.mock_mode:
+            self._assert_mock_mode_safe()
             return self._execute_mock(job=job, mode=mode)
 
         return self._execute_real(job=job, mode=mode)
+
+    def _assert_mock_mode_safe(self) -> None:
+        """Defense-in-depth: refuse if MOCK_MODE is inconsistent or forbidden libs loaded."""
+        if not self.settings.mock_mode:
+            raise MockModeViolationError(
+                "Internal error: mock path entered while MOCK_MODE=false"
+            )
+        loaded = sorted(
+            name for name in _FORBIDDEN_MODULES_WHEN_MOCK if name in sys.modules
+        )
+        if loaded:
+            raise MockModeViolationError(
+                "MOCK_MODE=true but forbidden execution modules are already imported: "
+                + ", ".join(loaded)
+            )
+        # Real adapter must not be imported in mock mode.
+        if "app.services.real_ansible_runner" in sys.modules:
+            raise MockModeViolationError(
+                "MOCK_MODE=true but real_ansible_runner is imported — refusing to continue"
+            )
 
     def _load_job(self, job_id: int) -> ExecutionJob:
         job = self.db.scalars(
@@ -108,12 +148,19 @@ class AnsibleExecutionService:
             )
 
     # ------------------------------------------------------------------
-    # MOCK path — no ansible-runner, no shell
+    # MOCK path — no ansible-runner, no shell, no SSH
     # ------------------------------------------------------------------
 
     def _execute_mock(
         self, *, job: ExecutionJob, mode: ExecutionMode
     ) -> JobExecutionSummary:
+        # Re-check at entry so this method is never a backdoor into real execution.
+        if not self.settings.mock_mode:
+            raise MockModeViolationError(
+                "Refusing _execute_mock while MOCK_MODE=false"
+            )
+        self._assert_mock_mode_safe()
+
         now = datetime.now(UTC)
         running_status = (
             JobStatus.DRY_RUN_RUNNING.value
@@ -137,6 +184,7 @@ class AnsibleExecutionService:
                 "mock_mode": True,
                 "mode": mode,
                 "task_code": job.task_code,
+                "execution_backend": "mock",
             },
         )
 
@@ -150,7 +198,6 @@ class AnsibleExecutionService:
 
         targets = list(job.targets)
         if not targets:
-            # Still produce a deterministic empty summary.
             summary = self._finalize_job(
                 job=job,
                 mode=mode,
@@ -190,8 +237,10 @@ class AnsibleExecutionService:
             mock_mode=True,
         )
         self.db.commit()
+        # Final safety check after mock work — still no forbidden modules.
+        self._assert_mock_mode_safe()
         logger.info(
-            "MOCK %s completed for job_id=%s status=%s hosts=%s",
+            "MOCK %s completed for job_id=%s status=%s hosts=%s (no ansible/shell/SSH)",
             mode,
             job.id,
             summary.job_status,
@@ -209,10 +258,11 @@ class AnsibleExecutionService:
     ) -> HostMockOutcome:
         """Generate fake but realistic Ansible-like output per host.
 
+        Pure string generation — no network, no subprocess, no SSH.
         Deterministic pattern (no randomness) so tests are stable:
         - every 7th host → failed
         - every 5th host (not failed) → skipped / already compliant
-        - otherwise success (dry-run: ok/changed preview; apply: changed)
+        - otherwise success (dry-run: ok preview; apply: changed)
         """
         host = target.device_name
         ip = target.ip_address or "0.0.0.0"
@@ -253,7 +303,6 @@ class AnsibleExecutionService:
             )
 
         if mode == "dry_run":
-            # Check mode: report what would change without applying.
             return HostMockOutcome(
                 status="success",
                 changed=False,
@@ -306,13 +355,7 @@ class AnsibleExecutionService:
         hosts_changed = sum(1 for _, o in outcomes if o.changed)
         hosts_success = hosts_total - hosts_failed
 
-        if hosts_total == 0:
-            final_status = (
-                JobStatus.DRY_RUN_SUCCESS.value
-                if mode == "dry_run"
-                else JobStatus.SUCCESS.value
-            )
-        elif hosts_failed == 0:
+        if hosts_total == 0 or hosts_failed == 0:
             final_status = (
                 JobStatus.DRY_RUN_SUCCESS.value
                 if mode == "dry_run"
@@ -335,7 +378,6 @@ class AnsibleExecutionService:
         job.finished_at = now
         if mode == "dry_run":
             job.dry_run_status = final_status
-            # After successful dry-run, waiting_approval is the natural next state.
             if final_status == JobStatus.DRY_RUN_SUCCESS.value:
                 job.status = JobStatus.WAITING_APPROVAL.value
 
@@ -349,6 +391,7 @@ class AnsibleExecutionService:
                 "event": "completed",
                 "mock_mode": mock_mode,
                 "mode": mode,
+                "execution_backend": "mock" if mock_mode else "real",
                 "job_status": job.status,
                 "dry_run_status": job.dry_run_status,
                 "hosts_total": hosts_total,
@@ -373,17 +416,25 @@ class AnsibleExecutionService:
         )
 
     # ------------------------------------------------------------------
-    # REAL path — intentionally not implemented yet
+    # REAL path — only reachable when MOCK_MODE=false
     # ------------------------------------------------------------------
 
     def _execute_real(
         self, *, job: ExecutionJob, mode: ExecutionMode
     ) -> JobExecutionSummary:
-        """Placeholder for Ansible Runner integration (Phase 6).
+        """Real Runner path. Hard-blocked while MOCK_MODE=true."""
+        if self.settings.mock_mode:
+            raise MockModeViolationError(
+                "Refusing real Ansible execution while MOCK_MODE=true. "
+                "No ansible-runner, ansible-playbook, subprocess, shell, or SSH is allowed."
+            )
 
-        Refuses to run shell/ansible-runner until explicitly implemented and
-        deployed on the internal Ansible control server (see DEPLOYMENT.md).
-        """
+        # Lazy import ONLY when mock_mode is False — keeps mock path free of Runner code.
+        from app.services.real_ansible_runner import (  # noqa: PLC0415
+            RealAnsibleNotImplementedError,
+            run_with_ansible_runner,
+        )
+
         write_audit_log(
             self.db,
             actor="system",
@@ -399,12 +450,16 @@ class AnsibleExecutionService:
             commit=False,
         )
         self.db.commit()
-        raise AnsibleExecutionError(
-            "MOCK_MODE=false but real Ansible Runner is not implemented yet. "
-            "Keep MOCK_MODE=true for local/dev, or deploy to the internal "
-            "Ansible control server and complete Phase 6 before enabling real execution. "
-            "See DEPLOYMENT.md."
-        )
+        try:
+            run_with_ansible_runner(job=job, mode=mode)
+        except RealAnsibleNotImplementedError as exc:
+            raise AnsibleExecutionError(
+                "MOCK_MODE=false but real Ansible Runner is not implemented yet. "
+                "Keep MOCK_MODE=true for local/dev, or deploy to the internal "
+                "Ansible control server and complete Phase 6 before enabling real execution. "
+                "See DEPLOYMENT.md."
+            ) from exc
+        raise AnsibleExecutionError("Unreachable: real runner returned unexpectedly")
 
 
 def summary_to_dict(summary: JobExecutionSummary) -> dict[str, Any]:

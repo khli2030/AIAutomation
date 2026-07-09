@@ -61,6 +61,16 @@ def test_real_path_refuses_without_runner() -> None:
     assert "DEPLOYMENT.md" in str(exc.value)
 
 
+def test_mock_mode_true_cannot_enter_real_path() -> None:
+    from app.services.ansible_execution import MockModeViolationError
+
+    db = MagicMock()
+    service = AnsibleExecutionService(db, settings=_settings(mock_mode=True))
+    job = SimpleNamespace(id=1, task_code="SSH_DISABLE_ROOT_LOGIN")
+    with pytest.raises(MockModeViolationError):
+        service._execute_real(job=job, mode="dry_run")
+
+
 def test_mock_mode_default_true() -> None:
     settings = Settings(
         admin_token="t",

@@ -17,7 +17,14 @@ Until that deployment and Phase 6 (Ansible Runner wiring) are complete, keep:
 MOCK_MODE=true
 ```
 
-With `MOCK_MODE=true`, `AnsibleExecutionService` returns fake but realistic per-host results and **never** calls `ansible-runner` or shell commands.
+With `MOCK_MODE=true`, `AnsibleExecutionService` returns fake but realistic per-host results and **never**:
+
+- imports or calls `ansible-runner`
+- runs `ansible-playbook`
+- uses `subprocess` / shell
+- opens SSH connections
+
+The real adapter (`real_ansible_runner.py`) is only imported lazily when `MOCK_MODE=false`, and even then it currently raises “not implemented” until Phase 6.
 
 ## Environments
 
