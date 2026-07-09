@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -12,6 +14,15 @@ from app.constants.record_status import RecordStatus
 from app.constants.task_codes import TaskCode
 from app.services.record_hash import compute_record_hash
 from app.services.validator import RecordValidationService, _is_already_compliant
+
+READY = RecordStatus.READY_FOR_PLAN.value
+FORBIDDEN_IMPORT_ROOTS = {
+    "ansible_execution",
+    "real_ansible_runner",
+    "subprocess",
+    "ansible_runner",
+    "openai",
+}
 
 
 def _finding(**kwargs: str | None) -> SimpleNamespace:
@@ -25,6 +36,23 @@ def _finding(**kwargs: str | None) -> SimpleNamespace:
     }
     base.update(kwargs)
     return SimpleNamespace(**base)
+
+
+def _imported_roots(module_file: str) -> set[str]:
+    tree = ast.parse(Path(module_file).read_text(encoding="utf-8"))
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module.split(".")[0])
+            # Also capture dotted app.* service modules for safety checks.
+            parts = node.module.split(".")
+            if len(parts) >= 2:
+                imported.add(parts[-1])
+                imported.add(".".join(parts[-2:]))
+    return imported
 
 
 @pytest.mark.parametrize(
@@ -48,6 +76,24 @@ def _finding(**kwargs: str | None) -> SimpleNamespace:
 def test_every_classifier_rule(text_field: str, expected: str) -> None:
     result = classify_record(_finding(remediation=text_field))
     assert result.task_code == expected
+    assert result.is_recognized is True
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "qualys_control_id",
+        "source_check_id",
+        "control_description",
+        "rationale",
+        "remediation",
+        "expected_configuration",
+    ],
+)
+def test_classifier_uses_each_text_field(field_name: str) -> None:
+    """Keyword in any of the six classifier fields must match (not only remediation)."""
+    result = classify_record(_finding(**{field_name: "PermitRootLogin no"}))
+    assert result.task_code == TaskCode.SSH_DISABLE_ROOT_LOGIN.value
     assert result.is_recognized is True
 
 
@@ -119,19 +165,13 @@ def _run_validation(records: list[SimpleNamespace], devices: set[str]):
         def all(self):
             return self._values
 
-    # First scalars call loads records; second (inside _load_active_device_names) loads devices.
-    # RecordValidationService calls: write_audit, select records, select assets, write_audit.
-    # We monkeypatch helpers instead for clarity.
     service = RecordValidationService(db)
     from app.services import validator as validator_mod
 
     original_load = validator_mod._load_active_device_names
     validator_mod._load_active_device_names = lambda _db: devices
     try:
-        db.scalars.side_effect = [
-            ScalarsResult(records),  # records query
-        ]
-        # validate_batch also calls db.scalars once for records only after patching assets loader
+        db.scalars.side_effect = [ScalarsResult(records)]
         summary = service.validate_batch(10)
     finally:
         validator_mod._load_active_device_names = original_load
@@ -142,29 +182,38 @@ def test_missing_device_name_invalid() -> None:
     rec = _record(device_name="")
     summary, records = _run_validation([rec], devices={"host-1"})
     assert records[0].validation_status == RecordStatus.INVALID_RECORD.value
+    assert records[0].validation_status != READY
     assert summary.invalid_record == 1
+    assert summary.ready_for_plan == 0
 
 
 def test_compliant_status_already_compliant() -> None:
-    rec = _record(overall_status="Passed")
+    # Known remediation must still not become READY_FOR_PLAN when already compliant.
+    rec = _record(overall_status="Passed", remediation="Set PermitRootLogin no")
     summary, records = _run_validation([rec], devices={"host-1"})
     assert records[0].validation_status == RecordStatus.ALREADY_COMPLIANT.value
+    assert records[0].validation_status != READY
     assert summary.already_compliant == 1
+    assert summary.ready_for_plan == 0
 
 
 def test_asset_not_found() -> None:
-    rec = _record(device_name="unknown-host")
+    # Known remediation + missing asset must never become READY_FOR_PLAN.
+    rec = _record(device_name="unknown-host", remediation="Set PermitRootLogin no")
     summary, records = _run_validation([rec], devices={"host-1"})
     assert records[0].validation_status == RecordStatus.ASSET_NOT_FOUND.value
+    assert records[0].validation_status != READY
     assert summary.asset_not_found == 1
+    assert summary.ready_for_plan == 0
 
 
 def test_duplicate_detection() -> None:
     r1 = _record(id=1, row_number=2)
     r2 = _record(id=2, row_number=3)
     summary, records = _run_validation([r1, r2], devices={"host-1"})
-    assert records[0].validation_status == RecordStatus.READY_FOR_PLAN.value
+    assert records[0].validation_status == READY
     assert records[1].validation_status == RecordStatus.DUPLICATE.value
+    assert records[1].validation_status != READY
     assert summary.duplicate == 1
     assert summary.ready_for_plan == 1
 
@@ -176,12 +225,12 @@ def test_valid_non_compliant_known_ready_for_plan() -> None:
         remediation="Set PermitRootLogin no in sshd_config",
     )
     summary, records = _run_validation([rec], devices={"host-1"})
-    assert records[0].validation_status == RecordStatus.READY_FOR_PLAN.value
+    assert records[0].validation_status == READY
     assert records[0].task_code == TaskCode.SSH_DISABLE_ROOT_LOGIN.value
     assert summary.ready_for_plan == 1
 
 
-def test_unknown_goes_needs_review() -> None:
+def test_unknown_goes_needs_review_never_ready_for_plan() -> None:
     rec = _record(
         device_name="host-1",
         overall_status="Failed",
@@ -195,7 +244,9 @@ def test_unknown_goes_needs_review() -> None:
     summary, records = _run_validation([rec], devices={"host-1"})
     assert records[0].validation_status == RecordStatus.NEEDS_REVIEW.value
     assert records[0].task_code == TaskCode.NEEDS_REVIEW.value
+    assert records[0].validation_status != READY
     assert summary.needs_review == 1
+    assert summary.ready_for_plan == 0
 
 
 def test_validate_batch_not_found() -> None:
@@ -205,20 +256,24 @@ def test_validate_batch_not_found() -> None:
         RecordValidationService(db).validate_batch(999)
 
 
-def test_no_ansible_imports_in_validator_module() -> None:
-    import ast
-    from pathlib import Path
+def test_phase3_modules_do_not_call_ansible_ai_or_plans() -> None:
+    """Phase 3 validate/classify path must not import execution, AI, or plan modules."""
+    import app.api.imports as imports_api
+    import app.classifiers.rules as rules_mod
+    import app.services.validator as validator_mod
 
-    import app.services.validator as mod
+    for mod in (validator_mod, rules_mod, imports_api):
+        roots = _imported_roots(mod.__file__)
+        for forbidden in FORBIDDEN_IMPORT_ROOTS:
+            assert forbidden not in roots, f"{mod.__name__} imports {forbidden}"
+        assert "ai_suggestions" not in roots
+        assert "ai_remediation_suggestion" not in roots
+        # generate-plan endpoint remains stubbed; validate path must not call plan services.
+        assert "execution_plan" not in roots
+        assert "plan_service" not in roots
 
-    tree = ast.parse(Path(mod.__file__).read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                imported.add(alias.name.split(".")[0])
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".")[0])
-    assert "ansible_execution" not in imported
-    assert "real_ansible_runner" not in imported
-    assert "subprocess" not in imported
+    source = Path(imports_api.__file__).read_text(encoding="utf-8")
+    assert "RecordValidationService" in source
+    assert "AnsibleExecutionService" not in source
+    assert "dry_run_job" not in source
+    assert "run_job" not in source
