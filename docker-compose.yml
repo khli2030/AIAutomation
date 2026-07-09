@@ -41,6 +41,7 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      MOCK_MODE: ${MOCK_MODE:-true}
       UPLOAD_DIR: /var/lib/compliance/uploads
       RUNNER_PRIVATE_DATA_DIR: /var/lib/compliance/ansible_private_data
       TMP_INVENTORY_DIR: /var/lib/compliance/tmp_inventories
@@ -76,6 +77,8 @@ services:
       ANSIBLE_CONFIG: /opt/ansible/ansible.cfg
       # Configurable; default True (safe). Ansible honors this env var.
       ANSIBLE_HOST_KEY_CHECKING: ${ANSIBLE_HOST_KEY_CHECKING:-True}
+      # Default true: never run ansible-runner locally. See DEPLOYMENT.md.
+      MOCK_MODE: ${MOCK_MODE:-true}
       UPLOAD_DIR: /var/lib/compliance/uploads
       RUNNER_PRIVATE_DATA_DIR: /var/lib/compliance/ansible_private_data
       TMP_INVENTORY_DIR: /var/lib/compliance/tmp_inventories

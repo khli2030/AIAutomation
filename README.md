@@ -16,6 +16,15 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 >
 > Ports bind to `127.0.0.1` only. PostgreSQL and Redis are not exposed on the LAN.
 
+## MOCK_MODE (important)
+
+| Setting | Behaviour |
+|---------|-----------|
+| `MOCK_MODE=true` (default) | `AnsibleExecutionService` generates fake per-host results. **No** `ansible-runner`, **no** shell. |
+| `MOCK_MODE=false` | Reserved for the internal Ansible control server. Real Runner is **not implemented yet** and will refuse to run until Phase 6. |
+
+**Real Ansible execution happens only after deploying to the internal Ansible control server.** See [`DEPLOYMENT.md`](DEPLOYMENT.md).
+
 ## Stack
 
 | Layer | Technology |
@@ -23,7 +32,7 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 | Backend | Python **FastAPI** |
 | Database | PostgreSQL |
 | Queue | Redis + Celery |
-| Automation | Ansible + Ansible Runner |
+| Automation | Ansible + Ansible Runner (mock until Phase 6) |
 | Frontend | Next.js (Phase 7; placeholder for now) |
 | Deploy | Docker Compose (internal) |
 
@@ -38,13 +47,14 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 1 + security hardening (this branch):** project structure, docker-compose (loopback binds), FastAPI skeleton with `ADMIN_TOKEN` guard, SQLAlchemy models, Alembic, Celery, Ansible layout, reviewed SSH playbook only enabled.
+**Phase 1 + security hardening + MOCK_MODE design:** Compose (loopback), `ADMIN_TOKEN` guard, models/Alembic/Celery, Ansible layout, `AnsibleExecutionService` with safe mock execution path.
 
 ## Quick start (internal Ansible host)
 
 ```bash
 cp .env.example .env
 # REQUIRED: set strong ADMIN_TOKEN, SECRET_KEY, POSTGRES_PASSWORD
+# Keep MOCK_MODE=true until Phase 6 on the Ansible control server
 
 docker compose up -d --build db redis backend celery-worker
 docker compose exec backend alembic upgrade head
@@ -64,7 +74,7 @@ curl -s http://127.0.0.1:8000/ \
   -H "X-Admin-Token: $ADMIN_TOKEN"
 ```
 
-API docs also require the token (browser extensions or curl). Prefer SSH tunnel from another host:
+Prefer SSH tunnel from another host:
 
 ```bash
 ssh -L 8000:127.0.0.1:8000 user@ansible-control.internal
@@ -72,14 +82,14 @@ ssh -L 8000:127.0.0.1:8000 user@ansible-control.internal
 
 ## Project layout
 
-See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-phase1-files.md`](docs/02-phase1-files.md), and [`docs/05-phase1-security-hardening.md`](docs/05-phase1-security-hardening.md).
+See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-phase1-files.md`](docs/02-phase1-files.md), [`docs/05-phase1-security-hardening.md`](docs/05-phase1-security-hardening.md), and [`DEPLOYMENT.md`](DEPLOYMENT.md).
 
 ## Phases
 
-1. Structure + compose + models + Celery ← **current (hardened)**
+1. Structure + compose + models + Celery ← **current (hardened + MOCK_MODE)**
 2. Excel upload + chunked parse
 3. Validation + classifier + asset match
 4. AI analyzer interface + suggestions
 5. Execution plans + approval + audit
-6. Ansible Runner dry-run / run
+6. Ansible Runner dry-run / run (real path when `MOCK_MODE=false`)
 7. Frontend pages

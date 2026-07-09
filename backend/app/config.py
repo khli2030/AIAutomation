@@ -50,6 +50,11 @@ class Settings(BaseSettings):
     excel_chunk_size: int = 500
     job_batch_size: int = 75
 
+    # When True, AnsibleExecutionService never calls ansible-runner or shell.
+    # Use for local/dev. Real execution only on the internal Ansible control server
+    # with MOCK_MODE=false (see DEPLOYMENT.md). Default True for safety.
+    mock_mode: bool = True
+
     # AI Analyzer is interface-only until explicitly configured (mock by default).
     ai_provider: str = "mock"
     ai_enabled: bool = False
