@@ -257,23 +257,46 @@ def test_validate_batch_not_found() -> None:
 
 
 def test_phase3_modules_do_not_call_ansible_ai_or_plans() -> None:
-    """Phase 3 validate/classify path must not import execution, AI, or plan modules."""
+    """Phase 3 validate/classify core must not import execution, AI, or plan modules.
+
+    Note: app.api.imports may also host Phase 4 AI analyze routes; AI isolation is
+    enforced on validator/classifier modules, while imports must still avoid Ansible.
+    """
     import app.api.imports as imports_api
     import app.classifiers.rules as rules_mod
     import app.services.validator as validator_mod
 
-    for mod in (validator_mod, rules_mod, imports_api):
+    for mod in (validator_mod, rules_mod):
         roots = _imported_roots(mod.__file__)
         for forbidden in FORBIDDEN_IMPORT_ROOTS:
             assert forbidden not in roots, f"{mod.__name__} imports {forbidden}"
         assert "ai_suggestions" not in roots
+        assert "ai_analyzer" not in roots
         assert "ai_remediation_suggestion" not in roots
-        # generate-plan endpoint remains stubbed; validate path must not call plan services.
         assert "execution_plan" not in roots
         assert "plan_service" not in roots
+
+    imports_roots = _imported_roots(imports_api.__file__)
+    for forbidden in FORBIDDEN_IMPORT_ROOTS:
+        assert forbidden not in imports_roots, f"imports imports {forbidden}"
+    assert "execution_plan" not in imports_roots
+    assert "plan_service" not in imports_roots
 
     source = Path(imports_api.__file__).read_text(encoding="utf-8")
     assert "RecordValidationService" in source
     assert "AnsibleExecutionService" not in source
     assert "dry_run_job" not in source
     assert "run_job" not in source
+
+    # Validate handler must remain separate from AI analyze (no AI call inside validate).
+    tree = ast.parse(source)
+    validate_node = next(
+        n
+        for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "validate_import_batch"
+    )
+    validate_body = ast.get_source_segment(source, validate_node)
+    assert validate_body is not None
+    assert "RecordValidationService" in validate_body
+    assert "AIAnalyzerService" not in validate_body
