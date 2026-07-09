@@ -35,7 +35,8 @@ export default function SettingsPage() {
         <h1>Settings</h1>
         <p>
           Configure API access. Never commit <code>ADMIN_TOKEN</code>. Prefer
-          pasting it here into sessionStorage for local lab use.
+          pasting it here into sessionStorage for local lab / MVP use only —
+          this is <strong>not</strong> production authentication.
         </p>
       </div>
       <SuccessBox message={saved} />
@@ -69,9 +70,10 @@ export default function SettingsPage() {
           </div>
         </form>
         <div className="safety-note">
-          Optional lab-only override: <code>NEXT_PUBLIC_ADMIN_TOKEN</code> in{" "}
-          <code>.env.local</code> (gitignored). Do not put secrets in committed
-          files. This UI never edits Ansible playbooks.
+          MVP-only: sessionStorage / <code>NEXT_PUBLIC_ADMIN_TOKEN</code> in
+          gitignored <code>.env.local</code> is a shared lab token, not
+          production auth. Do not put secrets in committed files. This UI never
+          edits Ansible playbooks.
         </div>
       </div>
     </div>

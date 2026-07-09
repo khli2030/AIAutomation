@@ -10,6 +10,7 @@ Internal Next.js operator console for the Linux Compliance Remediation Platform.
 - AI `generated_playbook` is read-only; convert-to-catalog always sends `enable: false`.
 - No playbook editor.
 - **`ADMIN_TOKEN` is never hardcoded** — paste into Settings (sessionStorage) or set `NEXT_PUBLIC_ADMIN_TOKEN` only in gitignored `.env.local`.
+- **sessionStorage token is MVP / lab-only** — not production authentication. Production needs real auth (SSO/OIDC/RBAC) behind TLS; do not treat the shared admin token as a security boundary.
 
 ## Local run
 

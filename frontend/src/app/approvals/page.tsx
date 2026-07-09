@@ -175,14 +175,16 @@ function ApprovalsInner() {
             dry_run_success. There is no playbook editor.
           </div>
           <div className="btn-row">
-            <button
-              className="btn primary"
-              type="button"
-              disabled={busy || !canDryRun}
-              onClick={() => void onDryRun()}
-            >
-              Run mock dry-run
-            </button>
+            {canDryRun ? (
+              <button
+                className="btn primary"
+                type="button"
+                disabled={busy}
+                onClick={() => void onDryRun()}
+              >
+                Run mock dry-run
+              </button>
+            ) : null}
             <button
               className="btn"
               type="button"
