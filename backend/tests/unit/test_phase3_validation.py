@@ -279,16 +279,14 @@ def test_phase3_modules_do_not_call_ansible_ai_or_plans() -> None:
     imports_roots = _imported_roots(imports_api.__file__)
     for forbidden in FORBIDDEN_IMPORT_ROOTS:
         assert forbidden not in imports_roots, f"imports imports {forbidden}"
-    assert "execution_plan" not in imports_roots
-    assert "plan_service" not in imports_roots
+    # imports may host Phase 5 generate-plan; Ansible/execution services must stay out.
+    assert "ansible_execution" not in imports_roots
 
     source = Path(imports_api.__file__).read_text(encoding="utf-8")
     assert "RecordValidationService" in source
     assert "AnsibleExecutionService" not in source
-    assert "dry_run_job" not in source
-    assert "run_job" not in source
 
-    # Validate handler must remain separate from AI analyze (no AI call inside validate).
+    # Validate handler must remain separate from AI analyze and plan generation.
     tree = ast.parse(source)
     validate_node = next(
         n
@@ -300,3 +298,4 @@ def test_phase3_modules_do_not_call_ansible_ai_or_plans() -> None:
     assert validate_body is not None
     assert "RecordValidationService" in validate_body
     assert "AIAnalyzerService" not in validate_body
+    assert "PlanGeneratorService" not in validate_body

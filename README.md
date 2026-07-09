@@ -47,9 +47,9 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 4 available:** mock AI analyzer for `NEEDS_REVIEW` records + draft suggestion review/approve/reject/convert-to-catalog (disabled by default). No external LLM calls, no Ansible execution, no plans.
+**Phase 5 available:** `POST /imports/{batch_id}/generate-plan` builds jobs from `READY_FOR_PLAN` + enabled catalog only (`waiting_dry_run`). Approve blocked until dry-run success; dry-run/run remain Phase 6. No Ansible execution.
 
-Also includes Phase 1–3 (upload/parse/validate) and `MOCK_MODE` (default true — no real Ansible).
+Also includes Phase 1–4 (upload/parse/validate/AI drafts) and `MOCK_MODE` (default true — no real Ansible).
 
 ## Quick start (internal Ansible host)
 
@@ -100,7 +100,7 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 1. Structure + compose + models + Celery
 2. Excel upload + chunked parse
 3. Validation + classifier + asset match
-4. AI analyzer interface + suggestions ← **current**
-5. Execution plans + approval + audit
+4. AI analyzer interface + suggestions
+5. Execution plans + approval + audit ← **current**
 6. Ansible Runner dry-run / run (real path when `MOCK_MODE=false`)
 7. Frontend pages
