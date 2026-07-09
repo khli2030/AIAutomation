@@ -47,9 +47,9 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 6 available:** mock dry-run / run / results via `AnsibleExecutionService` (`MOCK_MODE=true` default). Approve still requires `dry_run_success`. No real Ansible Runner, subprocess, or SSH.
+**Phase 6.5 available:** end-to-end mock workflow test + `scripts/e2e_mock_workflow.sh` (seed → upload → parse → validate → plan → dry-run → approve → run). Keep `MOCK_MODE=true`. No frontend or real Ansible until this E2E passes.
 
-Also includes Phase 1–5 (upload/parse/validate/AI drafts/plans) and `MOCK_MODE` (default true — no real Ansible).
+Also includes Phase 1–6 (upload/parse/validate/AI drafts/plans/mock dry-run/run) and `MOCK_MODE` (default true — no real Ansible).
 
 ## Quick start (internal Ansible host)
 
@@ -61,6 +61,10 @@ cp .env.example .env
 docker compose up -d --build db redis backend celery-worker
 docker compose exec backend alembic upgrade head
 docker compose exec backend python -m app.db.seed_cli
+# seeds remediation_catalog + lab test assets (e2e-linux-01..)
+
+# Full mock E2E (requires Celery worker + ADMIN_TOKEN):
+./scripts/e2e_mock_workflow.sh
 ```
 
 Upload example (requires ADMIN_TOKEN):
@@ -102,5 +106,6 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 3. Validation + classifier + asset match
 4. AI analyzer interface + suggestions
 5. Execution plans + approval + audit
-6. Ansible Runner dry-run / run (real path when `MOCK_MODE=false`) ← **current (mock path)**
+6. Ansible Runner dry-run / run (mock path; real path later when `MOCK_MODE=false`)
+6.5. E2E mock workflow test + CLI ← **current gate**
 7. Frontend pages
