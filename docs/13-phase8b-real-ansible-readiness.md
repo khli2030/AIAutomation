@@ -39,6 +39,11 @@ real execution by default. Keep `MOCK_MODE=true` and `REAL_ANSIBLE_ENABLED=false
 - Mock path: unchanged (`AnsibleExecutionService._execute_mock`)
 - Real path: lazy `app.services.real_ansible_runner.run_with_ansible_runner`
   after safety gates in `app.services.ansible_safety`
+- Phase 8B validates readiness (gates, paths, ansible-runner package presence via
+  `importlib.util.find_spec`) but **does not call** `ansible_runner.run()`.
+  Live invocation is deferred until per-host result persistence exists.
+- Preflight never imports `ansible_runner` (find_spec only) so MOCK_MODE workers
+  stay free of forbidden modules.
 
 ## Preflight
 

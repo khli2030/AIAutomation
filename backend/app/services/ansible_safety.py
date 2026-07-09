@@ -220,12 +220,17 @@ def resolve_inventory_path(settings: Settings, environment: str) -> Path:
 
 
 def ansible_runner_available() -> tuple[bool, str]:
-    """Return (available, detail) without importing at module load of callers."""
-    try:
-        import ansible_runner  # noqa: F401
-    except ImportError:
+    """Return (available, detail) without importing ansible_runner into sys.modules.
+
+    Uses importlib.util.find_spec so preflight / MOCK_MODE workers never load
+    ansible-runner (which would trip mock-path forbidden-module checks).
+    """
+    import importlib.util
+
+    spec = importlib.util.find_spec("ansible_runner")
+    if spec is None:
         return False, "ansible-runner is not installed"
-    return True, "ansible-runner importable"
+    return True, "ansible-runner package found (not imported)"
 
 
 def assert_ansible_runner_available() -> None:

@@ -7,12 +7,13 @@ IMPORTANT:
 - Production targets and APP_ENV=production remain blocked.
 - Only enabled remediation_catalog playbook paths are used — never AI drafts,
   never Excel Remediation text, never arbitrary shell.
+- Phase 8B does NOT call ansible_runner.run(); it validates readiness only.
+  Live invocation is deferred until per-host result persistence exists.
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from app.config import Settings, get_settings
@@ -68,10 +69,11 @@ def run_with_ansible_runner(
     catalog: RemediationCatalog | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Execute via ansible-runner after Phase 8B safety gates.
+    """Validate Phase 8B real-Ansible readiness (no live ansible-runner.run).
 
-    Returns a structured result dict. Raises RealAnsibleBlockedError when gated,
-    AnsibleRunnerMissingError when ansible-runner is not installed.
+    Raises RealAnsibleBlockedError when gated or when readiness-only deferral applies.
+    Raises AnsibleRunnerMissingError when ansible-runner is not installed.
+    Never falls back to ansible-playbook / subprocess / shell / paramiko.
     """
     cfg = settings or get_settings()
 
@@ -102,35 +104,28 @@ def run_with_ansible_runner(
     # 4) Inventory under ansible/inventories for lab/test only.
     inventory_path = resolve_inventory_path(cfg, getattr(job, "environment", None) or "")
 
-    # 5) ansible-runner must be available — no subprocess/ansible-playbook fallback.
+    # 5) ansible-runner must be available — checked via find_spec (no import).
+    #    No subprocess/ansible-playbook fallback.
     assert_ansible_runner_available()
 
-    # Lazy import only after gates pass.
-    import ansible_runner  # noqa: PLC0415
-
-    private_data_dir = Path(cfg.runner_private_data_dir)
-    private_data_dir.mkdir(parents=True, exist_ok=True)
+    # 6) Phase 8B: dry-run readiness only — never invoke live apply.
+    if mode != "dry_run":
+        raise RealAnsibleBlockedError(
+            "Phase 8B blocks real apply/run. Only dry-run readiness is in scope; "
+            "keep MOCK_MODE=true for operator workflows.",
+            code="apply_blocked_phase8b",
+        )
 
     limit_hosts = [
         t.device_name
         for t in list(getattr(job, "targets", None) or [])
         if getattr(t, "device_name", None)
     ]
-    cmdline_parts: list[str] = []
-    if mode == "dry_run":
-        cmdline_parts.append("--check")
-    if not cfg.ansible_host_key_checking:
-        # Default remains True (safe). Only pass override when explicitly disabled.
-        pass
-
-    envvars = {
-        "ANSIBLE_HOST_KEY_CHECKING": "True" if cfg.ansible_host_key_checking else "False",
-        "ANSIBLE_ROLES_PATH": "",
-    }
 
     logger.info(
-        "Phase 8B real ansible-runner: job_id=%s mode=%s playbook=%s inventory=%s "
-        "limit=%s (no AI draft, no remediation text, no shell)",
+        "Phase 8B real ansible readiness OK (no live run): job_id=%s mode=%s "
+        "playbook=%s inventory=%s limit=%s — ansible-runner available but "
+        "ansible_runner.run() is not called until persistence is wired",
         job.id,
         mode,
         playbook_path,
@@ -138,41 +133,14 @@ def run_with_ansible_runner(
         limit_hosts,
     )
 
-    run_kwargs: dict[str, Any] = {
-        "private_data_dir": str(private_data_dir / f"job-{job.id}-{mode}"),
-        "playbook": str(playbook_path),
-        "inventory": str(inventory_path),
-        "quiet": True,
-        "envvars": envvars,
-    }
-    if cmdline_parts:
-        run_kwargs["cmdline"] = " ".join(cmdline_parts)
-    if limit_hosts:
-        run_kwargs["limit"] = ",".join(limit_hosts)
-
-    # ansible-runner writes under private_data_dir only (runtime artifacts).
-    runner = ansible_runner.run(**run_kwargs)
-
-    status = getattr(runner, "status", "unknown")
-    rc = getattr(runner, "rc", None)
-    stdout_text = ""
-    stdout_obj = getattr(runner, "stdout", None)
-    if stdout_obj is not None:
-        try:
-            stdout_text = stdout_obj.read() if hasattr(stdout_obj, "read") else str(stdout_obj)
-        except Exception:  # noqa: BLE001 — best-effort capture only
-            stdout_text = ""
-
-    return {
-        "ok": status == "successful" and (rc in (0, None)),
-        "status": status,
-        "rc": rc,
-        "mode": mode,
-        "playbook": str(playbook_path),
-        "inventory": str(inventory_path),
-        "used_ai_generated_playbook": False,
-        "used_remediation_text": False,
-        "execution_backend": "ansible-runner",
-        "limit": limit_hosts,
-        "stdout": stdout_text,
-    }
+    # Intentionally do NOT `import ansible_runner` or call ansible_runner.run()
+    # in Phase 8B. Import/call will live only in this guarded function once
+    # per-host result persistence is implemented.
+    raise RealAnsibleBlockedError(
+        "Phase 8B readiness passed: gates OK, playbook/inventory paths OK, "
+        "ansible-runner is available. Live ansible-runner invocation is deferred "
+        "until per-host result persistence is implemented. "
+        f"job_id={job.id} mode={mode} playbook={playbook_path} "
+        f"inventory={inventory_path}. Keep MOCK_MODE=true for normal workflows.",
+        code="phase8b_readiness_only",
+    )

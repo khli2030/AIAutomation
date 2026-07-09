@@ -579,7 +579,10 @@ class AnsibleExecutionService:
         catalog_entry = catalog or self._assert_catalog_allows(job.task_code)
 
         try:
-            result = run_with_ansible_runner(
+            # Phase 8B: adapter validates gates/paths/runner availability and raises
+            # RealAnsibleBlockedError(code=phase8b_readiness_only) without calling
+            # ansible_runner.run(). Live apply is also blocked in the adapter.
+            run_with_ansible_runner(
                 job=job,
                 mode=mode,
                 catalog=catalog_entry,
@@ -591,33 +594,8 @@ class AnsibleExecutionService:
             _audit_blocked(reason, code)
             raise AnsibleExecutionError(reason) from exc
 
-        # Phase 8B: real runner may return a result dict; persist a completion audit.
-        # Full per-host result mapping remains a later hardening step — readiness first.
-        write_audit_log(
-            self.db,
-            actor=actor,
-            action="dry_run" if mode == "dry_run" else "run",
-            entity_type="execution_job",
-            entity_id=job.id,
-            role=role,
-            details={
-                "event": "real_runner_invoked",
-                "mock_mode": False,
-                "mode": mode,
-                "execution_backend": "ansible-runner",
-                "playbook": result.get("playbook"),
-                "inventory": result.get("inventory"),
-                "runner_status": result.get("status"),
-                "used_ai_generated_playbook": False,
-                "used_remediation_text": False,
-            },
-            commit=False,
-        )
-        self.db.commit()
         raise AnsibleExecutionError(
-            "Phase 8B real ansible-runner invoked for lab/test readiness, but "
-            "per-host result persistence is not fully wired yet. "
-            f"runner_status={result.get('status')!r} rc={result.get('rc')!r}. "
+            "Unreachable: Phase 8B real adapter must raise after readiness checks. "
             "Keep MOCK_MODE=true for normal operator workflows."
         )
 
