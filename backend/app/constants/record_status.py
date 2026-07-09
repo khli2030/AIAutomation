@@ -1,0 +1,13 @@
+"""Record validation / classification statuses."""
+
+from enum import StrEnum
+
+
+class RecordStatus(StrEnum):
+    READY_FOR_PLAN = "READY_FOR_PLAN"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    ASSET_NOT_FOUND = "ASSET_NOT_FOUND"
+    ALREADY_COMPLIANT = "ALREADY_COMPLIANT"
+    UNSUPPORTED_CONTROL = "UNSUPPORTED_CONTROL"
+    DUPLICATE = "DUPLICATE"
+    INVALID_RECORD = "INVALID_RECORD"

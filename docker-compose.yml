@@ -1,0 +1,156 @@
+# Internal-only Docker Compose for the Ansible control server.
+#
+# Assumptions:
+# - Runs on an internal Linux host that already has Ansible + SSH access to targets.
+# - No AWS / no public cloud services.
+# - Platform, Celery worker, and Ansible Runner share this host (MVP).
+# - DB/Redis/API ports bind to loopback by default (not exposed on LAN).
+#
+# Images: prefer an internal registry via INTERNAL_REGISTRY in .env.
+# If unset, compose uses local image names that must already exist on the host
+# or be loadable from your internal mirror (do not rely on public cloud pulls
+# in production-locked networks).
+
+name: compliance-internal
+
+services:
+  db:
+    image: ${INTERNAL_REGISTRY:-}postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-compliance}
+      POSTGRES_USER: ${POSTGRES_USER:-compliance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-compliance_change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Loopback only — not published on the corporate LAN.
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:5432:5432"
+    networks:
+      - compliance_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-compliance} -d ${POSTGRES_DB:-compliance}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: ${INTERNAL_REGISTRY:-}redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:6379:6379"
+    networks:
+      - compliance_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim}
+    image: ${INTERNAL_REGISTRY:-}compliance-backend:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://compliance:compliance_change_me@db:5432/compliance}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      UPLOAD_DIR: /var/lib/compliance/uploads
+      # AI stays mock/local — never required for core remediation flow.
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+    volumes:
+      - ./backend/app:/app/app
+      - ${DATA_DIR:-./data}:/var/lib/compliance
+      - ${ANSIBLE_HOST_DIR:-./ansible}:/opt/ansible:ro
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:8000:8000"
+    networks:
+      - compliance_internal
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      args:
+        BASE_IMAGE: ${PYTHON_BASE_IMAGE:-python:3.12-slim}
+    image: ${INTERNAL_REGISTRY:-}compliance-backend:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://compliance:compliance_change_me@db:5432/compliance}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      ANSIBLE_HOME: /opt/ansible
+      ANSIBLE_PLAYBOOKS_DIR: /opt/ansible/playbooks
+      ANSIBLE_INVENTORIES_DIR: /opt/ansible/inventories
+      ANSIBLE_CONFIG: /opt/ansible/ansible.cfg
+      # Host Ansible SSH identity (mounted below). Never bake keys into images.
+      ANSIBLE_PRIVATE_KEY_FILE: ${ANSIBLE_PRIVATE_KEY_FILE:-/opt/ansible-ssh/id_rsa}
+      UPLOAD_DIR: /var/lib/compliance/uploads
+      RUNNER_PRIVATE_DATA_DIR: /var/lib/compliance/ansible_private_data
+      TMP_INVENTORY_DIR: /var/lib/compliance/tmp_inventories
+      AI_ENABLED: ${AI_ENABLED:-false}
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+    volumes:
+      - ./backend/app:/app/app
+      - ${DATA_DIR:-./data}:/var/lib/compliance
+      # Playbooks/inventories from this repo OR an existing host Ansible tree.
+      - ${ANSIBLE_HOST_DIR:-./ansible}:/opt/ansible:ro
+      # SSH keys from the Ansible control server (read-only).
+      # Place id_rsa (or configured key name) under ANSIBLE_SSH_DIR on the host.
+      - ${ANSIBLE_SSH_DIR:-./data/ansible-ssh}:/opt/ansible-ssh:ro
+    networks:
+      - compliance_internal
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Worker executes Ansible Runner against internal targets via host SSH keys.
+    command: >
+      celery -A app.workers.celery_app.celery_app worker --loglevel=INFO --concurrency=2
+
+  frontend:
+    profiles: ["frontend"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    image: ${INTERNAL_REGISTRY:-}compliance-frontend:local
+    environment:
+      # Browser on the same internal host / VPN reaches loopback-published API.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8000}
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:3000:3000"
+    networks:
+      - compliance_internal
+    depends_on:
+      - backend
+
+networks:
+  compliance_internal:
+    driver: bridge
+    name: compliance_internal
+    internal: false
+    # Set COMPOSE_INTERNAL_NETWORK=true in locked labs only if containers need
+    # isolation from outbound internet; then Ansible SSH to LAN may require
+    # host-network mode for celery-worker (see docs/04-internal-dev-environment.md).
+
+volumes:
+  postgres_data:
+    name: compliance_postgres_data

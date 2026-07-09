@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Node / frontend
+frontend/node_modules/
+frontend/.next/
+frontend/dist/
+frontend/out/
+
+# Runtime data (keep directory placeholders)
+data/uploads/*
+!data/uploads/.gitkeep
+data/ansible_private_data/*
+!data/ansible_private_data/.gitkeep
+data/tmp_inventories/*
+!data/tmp_inventories/.gitkeep
+
+# Ansible SSH keys on the control server — never commit
+data/ansible-ssh/*
+!data/ansible-ssh/.gitkeep
+!data/ansible-ssh/README.md
+*.pem
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Ansible Runner leftovers
+*.retry
