@@ -1,0 +1,12 @@
+---
+# Placeholder playbook — implement safely in a later phase.
+
+- name: Set /var/log permissions
+  hosts: all
+  become: true
+  serial: 20
+  gather_facts: false
+  tasks:
+    - name: Placeholder — not implemented
+      ansible.builtin.debug:
+        msg: "Playbook stub for SET_VAR_LOG_PERMISSIONS"
