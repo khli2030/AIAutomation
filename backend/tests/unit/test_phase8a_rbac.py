@@ -259,3 +259,51 @@ def test_job_approval_audit_includes_role() -> None:
     audit_obj = db.add.call_args[0][0]
     details = json.loads(audit_obj.details)
     assert details["auth_role"] == "approver"
+
+
+def test_ai_analyze_audit_stores_actor_and_role() -> None:
+    """ai-analyze-needs-review audit must include authenticated actor + auth_role."""
+    from app.ai.provider import MockAIProvider
+    from app.constants.record_status import RecordStatus
+    from app.models.audit_log import AuditLog
+    from app.services.ai_analyzer import AIAnalyzerService
+
+    class _Scalars:
+        def __init__(self, items: list[object]) -> None:
+            self._items = items
+
+        def all(self) -> list[object]:
+            return self._items
+
+    record = SimpleNamespace(
+        id=1,
+        batch_id=10,
+        row_number=1,
+        validation_status=RecordStatus.NEEDS_REVIEW.value,
+        device_name="host-a",
+        qualys_control_id="Q-1",
+        source_check_id="S-1",
+        control_description="PermitRootLogin",
+        remediation="Set PermitRootLogin no",
+        expected_configuration="PermitRootLogin no",
+        rationale="security",
+    )
+    db = MagicMock()
+    db.get.return_value = SimpleNamespace(id=10)
+    db.scalars.return_value = _Scalars([record])
+
+    AIAnalyzerService(db, provider=MockAIProvider()).analyze_batch_needs_review(
+        10, actor="role:operator", role="operator"
+    )
+
+    audit_entries = [
+        c.args[0]
+        for c in db.add.call_args_list
+        if isinstance(c.args[0], AuditLog)
+    ]
+    assert len(audit_entries) >= 2
+    for entry in audit_entries:
+        assert entry.actor == "role:operator"
+        details = json.loads(entry.details or "{}")
+        assert details["auth_role"] == "operator"
+        assert details["event"].startswith("ai_analyze_")

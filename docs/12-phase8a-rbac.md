@@ -49,7 +49,8 @@ Sensitive actions write `audit_logs` with:
 - `actor` — e.g. `role:operator`
 - `details.auth_role` — e.g. `operator`
 
-Covered actions: upload, validate, generate_plan, dry_run, approve, reject, run, AI approve/reject, convert-to-catalog.
+Covered actions: upload, validate, generate_plan, dry_run, approve, reject, run,
+AI analyze (`ai-analyze-needs-review`), AI approve/reject, convert-to-catalog.
 
 ## Separation of duties (production requirement)
 

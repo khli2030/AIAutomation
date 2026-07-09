@@ -213,7 +213,9 @@ def ai_analyze_needs_review(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import batch not found")
 
     try:
-        summary = AIAnalyzerService(db).analyze_batch_needs_review(batch_id)
+        summary = AIAnalyzerService(db).analyze_batch_needs_review(
+            batch_id, actor=auth.actor, role=auth.role.value
+        )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
