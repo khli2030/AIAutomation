@@ -71,9 +71,13 @@ app.include_router(api_router)
 needs_review_router = APIRouter()
 
 
-@needs_review_router.get("/needs-review", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def needs_review() -> None:
-    raise HTTPException(status_code=501, detail="Not implemented yet (Phase 3/4)")
+@needs_review_router.get("/needs-review")
+def needs_review() -> dict[str, str]:
+    """Convenience pointer — use GET /ai-suggestions?status=draft for Phase 4 reviews."""
+    return {
+        "detail": "Use GET /ai-suggestions (optional ?status=draft) for AI suggestion review.",
+        "list_path": "/ai-suggestions",
+    }
 
 
 app.include_router(needs_review_router)
@@ -85,7 +89,7 @@ def root() -> dict[str, str]:
         "app": settings.app_name,
         "env": settings.app_env,
         "docs": "/docs",
-        "phase": "3",
+        "phase": "4",
         "auth": "ADMIN_TOKEN required for non-health endpoints",
         "mock_mode": str(settings.mock_mode).lower(),
     }

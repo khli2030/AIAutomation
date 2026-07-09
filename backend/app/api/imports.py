@@ -10,6 +10,7 @@ from app.config import Settings, get_settings
 from app.db.session import get_db
 from app.models.import_batch import ImportBatch
 from app.models.raw_import_record import RawImportRecord
+from app.schemas.ai_suggestions import AIAnalyzeSummaryResponse
 from app.schemas.imports import (
     ImportBatchResponse,
     ImportUploadResponse,
@@ -17,6 +18,7 @@ from app.schemas.imports import (
     RawImportRecordResponse,
     ValidationSummaryResponse,
 )
+from app.services.ai_analyzer import AIAnalyzerService
 from app.services.import_service import (
     ImportUploadError,
     create_import_batch_record,
@@ -137,6 +139,31 @@ def validate_import_batch(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     return ValidationSummaryResponse(**summary.to_dict())
+
+
+@router.post(
+    "/{batch_id}/ai-analyze-needs-review",
+    response_model=AIAnalyzeSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+def ai_analyze_needs_review(
+    batch_id: int,
+    db: Session = Depends(get_db),
+) -> AIAnalyzeSummaryResponse:
+    """Analyze NEEDS_REVIEW records only; persist draft AI suggestions (Phase 4).
+
+    Does not execute playbooks, call Ansible/MOCK, or write remediation_catalog.
+    """
+    batch = db.get(ImportBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import batch not found")
+
+    try:
+        summary = AIAnalyzerService(db).analyze_batch_needs_review(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return AIAnalyzeSummaryResponse(**summary.to_dict())
 
 
 @router.post("/{batch_id}/generate-plan", status_code=status.HTTP_501_NOT_IMPLEMENTED)
