@@ -47,9 +47,9 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 8B available:** Real Ansible *readiness* (lab/test gates + preflight). Defaults remain `MOCK_MODE=true` and `REAL_ANSIBLE_ENABLED=false`. Production real execution stays blocked. See [`docs/13-phase8b-real-ansible-readiness.md`](docs/13-phase8b-real-ansible-readiness.md).
+**Phase 8C available:** Lab-only real Ansible **dry-run** (ansible-runner `--check`). Defaults remain `MOCK_MODE=true` and `REAL_ANSIBLE_ENABLED=false`. Real apply/run stays blocked. See [`docs/14-phase8c-lab-real-dry-run.md`](docs/14-phase8c-lab-real-dry-run.md).
 
-Also includes Phase 1–8A (API + Next.js operator UI + MVP RBAC).
+Also includes Phase 1–8B (API + Next.js + MVP RBAC + readiness gates).
 
 ## Quick start (internal Ansible host)
 
@@ -139,5 +139,6 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 7. Frontend pages
 7.5. UI E2E mock test (Playwright + manual)
 8A. Minimal MVP RBAC (role tokens)
-8B. Real Ansible readiness (lab/test gates + preflight) ← **current**
-8. Full real Ansible integration (keep MOCK_MODE=true / REAL_ANSIBLE_ENABLED=false by default)
+8B. Real Ansible readiness (lab/test gates + preflight)
+8C. Lab-only real Ansible dry-run (ansible-runner --check) ← **current**
+8. Full real Ansible apply/run (not started — keep defaults safe)

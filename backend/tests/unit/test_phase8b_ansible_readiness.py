@@ -10,6 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.config import Settings, get_settings
+from app.models.audit_log import AuditLog
 from app.services.ansible_execution import (
     AnsibleExecutionError,
     AnsibleExecutionService,
@@ -107,7 +108,7 @@ def test_mock_false_and_real_disabled_blocks_execution() -> None:
     assert db.add.called
     audit = db.add.call_args[0][0]
     details = json.loads(audit.details)
-    assert details["event"] == "blocked"
+    assert details["event"] == "real_dry_run_blocked"
     assert details["used_ai_generated_playbook"] is False
     assert details["used_remediation_text"] is False
 
@@ -296,6 +297,11 @@ def test_execute_real_blocks_production_target_and_audits() -> None:
         task_code="SSH_DISABLE_ROOT_LOGIN",
         environment="production",
         targets=[],
+        status="waiting_dry_run",
+        dry_run_status=None,
+        started_at=None,
+        finished_at=None,
+        ansible_group=None,
     )
     catalog = SimpleNamespace(
         task_code="SSH_DISABLE_ROOT_LOGIN",
@@ -304,10 +310,17 @@ def test_execute_real_blocks_production_target_and_audits() -> None:
     )
     with pytest.raises(AnsibleExecutionError, match="production"):
         service._execute_real(job=job, mode="dry_run", catalog=catalog)
-    audit = db.add.call_args[0][0]
-    details = json.loads(audit.details)
-    assert details["event"] == "blocked"
-    assert details["job_environment"] == "production"
+    audits = [
+        json.loads(c.args[0].details)
+        for c in db.add.call_args_list
+        if isinstance(c.args[0], AuditLog)
+    ]
+    blocked = [a for a in audits if a.get("event") in {"blocked", "real_dry_run_blocked"}]
+    assert blocked
+    assert any(
+        a.get("job_environment") == "production" or "production" in a.get("reason", "")
+        for a in blocked
+    )
 
 
 def test_missing_ansible_runner_clear_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -379,7 +392,7 @@ def test_symlink_escape_from_playbooks_blocked(tmp_path: Path) -> None:
 
 
 def test_real_apply_blocked_in_phase8b(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Live apply must not call ansible_runner.run in Phase 8B."""
+    """Live apply must not call ansible_runner.run (Phase 8C still blocks apply)."""
     playbooks = tmp_path / "playbooks"
     inventories = tmp_path / "inventories"
     playbooks.mkdir()
@@ -413,6 +426,11 @@ def test_real_apply_blocked_in_phase8b(tmp_path: Path, monkeypatch: pytest.Monke
 def test_real_dry_run_readiness_does_not_call_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Legacy 8B name: dry-run now may call runner, but only via guarded path with --check.
+
+    This test keeps the apply-block + package-presence contract from 8B and is
+    superseded by Phase 8C tests for actual check-mode invocation.
+    """
     playbooks = tmp_path / "playbooks"
     inventories = tmp_path / "inventories"
     playbooks.mkdir()
@@ -424,9 +442,6 @@ def test_real_dry_run_readiness_does_not_call_runner(
         "app.services.ansible_safety.ansible_runner_available",
         lambda: (True, "ansible-runner package found (not imported)"),
     )
-    import sys
-
-    sys.modules.pop("ansible_runner", None)
     from app.services.real_ansible_runner import run_with_ansible_runner
 
     job = SimpleNamespace(id=9, environment="test", targets=[])
@@ -441,13 +456,40 @@ def test_real_dry_run_readiness_does_not_call_runner(
         app_env="test",
         ansible_playbooks_dir=str(playbooks),
         ansible_inventories_dir=str(inventories),
+        upload_dir=str(tmp_path / "uploads"),
+        runner_private_data_dir=str(tmp_path / "runner"),
+        tmp_inventory_dir=str(tmp_path / "tmpinv"),
     )
-    with pytest.raises(RealAnsibleBlockedError) as exc:
-        run_with_ansible_runner(
-            job=job, mode="dry_run", catalog=catalog, settings=settings
-        )
-    assert exc.value.code == "phase8b_readiness_only"
-    assert "ansible_runner" not in sys.modules
+
+    class _FakeRunner:
+        status = "successful"
+        rc = 0
+        events: list = []
+
+    calls: list[dict] = []
+
+    class _FakeAR:
+        @staticmethod
+        def run(**kwargs):  # type: ignore[no-untyped-def]
+            calls.append(kwargs)
+            return _FakeRunner()
+
+    import sys
+    import types
+
+    fake = types.ModuleType("ansible_runner")
+    fake.run = _FakeAR.run  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ansible_runner", fake)
+
+    # No expected hosts → empty events OK.
+    out = run_with_ansible_runner(
+        job=job, mode="dry_run", catalog=catalog, settings=settings
+    )
+    assert out["check_mode"] is True
+    assert out["cmdline"] == "--check"
+    assert calls and "--check" in calls[0].get("cmdline", "")
+    assert out["used_ai_generated_playbook"] is False
+    assert out["used_remediation_text"] is False
 
 
 def test_blocked_audit_includes_actor_role_job_and_reason() -> None:
@@ -469,7 +511,7 @@ def test_blocked_audit_includes_actor_role_job_and_reason() -> None:
     assert audit.actor == "role:operator"
     assert audit.entity_id == "77"
     details = json.loads(audit.details)
-    assert details["event"] == "blocked"
+    assert details["event"] == "real_dry_run_blocked"
     assert details["auth_role"] == "operator"
     assert "REAL_ANSIBLE_ENABLED=false" in details["reason"]
     assert details["used_ai_generated_playbook"] is False

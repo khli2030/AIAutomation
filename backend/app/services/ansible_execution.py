@@ -1,8 +1,9 @@
 """Ansible execution facade.
 
 MOCK_MODE=true  → fake realistic per-host results; never runs ansible-runner/shell/SSH.
-MOCK_MODE=false → real Ansible Runner path (Phase 8B), still gated by:
+MOCK_MODE=false → Phase 8C lab-only real dry-run (ansible-runner --check), gated by:
   REAL_ANSIBLE_ENABLED=true, APP_ENV in {lab,test}, targets environment in {lab,test}.
+  Real apply/run remains blocked.
 
 Hard guarantee when MOCK_MODE=true:
 - No import of ansible_runner / paramiko
@@ -443,10 +444,13 @@ class AnsibleExecutionService:
         mock_mode: bool,
         actor: str = "system",
         role: str | None = None,
+        write_completion_audit: bool = True,
     ) -> JobExecutionSummary:
         now = datetime.now(UTC)
         hosts_total = len(outcomes)
-        hosts_failed = sum(1 for _, o in outcomes if o.status == "failed")
+        hosts_failed = sum(
+            1 for _, o in outcomes if o.status in {"failed", "unreachable"}
+        )
         hosts_skipped = sum(1 for _, o in outcomes if o.skipped)
         hosts_changed = sum(1 for _, o in outcomes if o.changed)
         hosts_success = hosts_total - hosts_failed
@@ -477,28 +481,29 @@ class AnsibleExecutionService:
             # Do NOT auto-advance to waiting_approval — human approve is required.
             job.dry_run_status = final_status
 
-        write_audit_log(
-            self.db,
-            actor=actor,
-            action="dry_run" if mode == "dry_run" else "run",
-            entity_type="execution_job",
-            entity_id=job.id,
-            role=role,
-            details={
-                "event": "completed",
-                "mock_mode": mock_mode,
-                "mode": mode,
-                "result_type": _result_type_for_mode(mode),
-                "execution_backend": "mock" if mock_mode else "real",
-                "job_status": job.status,
-                "dry_run_status": job.dry_run_status,
-                "hosts_total": hosts_total,
-                "hosts_success": hosts_success,
-                "hosts_failed": hosts_failed,
-                "hosts_changed": hosts_changed,
-                "hosts_skipped": hosts_skipped,
-            },
-        )
+        if write_completion_audit:
+            write_audit_log(
+                self.db,
+                actor=actor,
+                action="dry_run" if mode == "dry_run" else "run",
+                entity_type="execution_job",
+                entity_id=job.id,
+                role=role,
+                details={
+                    "event": "completed",
+                    "mock_mode": mock_mode,
+                    "mode": mode,
+                    "result_type": _result_type_for_mode(mode),
+                    "execution_backend": "mock" if mock_mode else "real",
+                    "job_status": job.status,
+                    "dry_run_status": job.dry_run_status,
+                    "hosts_total": hosts_total,
+                    "hosts_success": hosts_success,
+                    "hosts_failed": hosts_failed,
+                    "hosts_changed": hosts_changed,
+                    "hosts_skipped": hosts_skipped,
+                },
+            )
 
         return JobExecutionSummary(
             job_id=job.id,
@@ -526,7 +531,7 @@ class AnsibleExecutionService:
         role: str | None = None,
         catalog: RemediationCatalog | None = None,
     ) -> JobExecutionSummary:
-        """Real Runner path. Hard-blocked while MOCK_MODE=true; Phase 8B lab/test gates apply."""
+        """Phase 8C lab-only real dry-run. Hard-blocked while MOCK_MODE=true."""
         if self.settings.mock_mode:
             raise MockModeViolationError(
                 "Refusing real Ansible execution while MOCK_MODE=true. "
@@ -554,7 +559,9 @@ class AnsibleExecutionService:
                 entity_id=job.id,
                 role=role,
                 details={
-                    "event": "blocked",
+                    "event": (
+                        "real_dry_run_blocked" if mode == "dry_run" else "blocked"
+                    ),
                     "mock_mode": False,
                     "real_ansible_enabled": bool(self.settings.real_ansible_enabled),
                     "app_env": self.settings.app_env,
@@ -569,6 +576,15 @@ class AnsibleExecutionService:
             )
             self.db.commit()
 
+        # Phase 8C: real apply/run stays blocked at the service layer too.
+        if mode != "dry_run":
+            reason = (
+                "Phase 8C blocks real apply/run. Only ansible-runner check-mode "
+                "dry-run is allowed."
+            )
+            _audit_blocked(reason, "apply_blocked_phase8c")
+            raise AnsibleExecutionError(reason)
+
         # Settings gates first so blocked attempts are audited even without catalog.
         try:
             assert_settings_allow_real_ansible(self.settings)
@@ -577,27 +593,221 @@ class AnsibleExecutionService:
             raise AnsibleExecutionError(exc.reason) from exc
 
         catalog_entry = catalog or self._assert_catalog_allows(job.task_code)
+        playbook_path = (catalog_entry.ansible_playbook_path or "").strip()
+
+        now = datetime.now(UTC)
+        job.status = JobStatus.DRY_RUN_RUNNING.value
+        job.dry_run_status = JobStatus.DRY_RUN_RUNNING.value
+        job.started_at = job.started_at or now
+        self.db.flush()
+
+        write_audit_log(
+            self.db,
+            actor=actor,
+            action="dry_run",
+            entity_type="execution_job",
+            entity_id=job.id,
+            role=role,
+            details={
+                "event": "real_dry_run_started",
+                "mock_mode": False,
+                "mode": "dry_run",
+                "result_type": JobResultType.DRY_RUN.value,
+                "task_code": job.task_code,
+                "ansible_playbook_path": playbook_path,
+                "job_environment": getattr(job, "environment", None),
+                "used_ai_generated_playbook": False,
+                "used_remediation_text": False,
+                "execution_backend": "ansible-runner",
+                "check_mode": True,
+            },
+            commit=False,
+        )
+        self.db.flush()
+
+        # Replace previous dry_run results only.
+        result_type = JobResultType.DRY_RUN.value
+        existing = self.db.scalars(
+            select(JobResult).where(
+                JobResult.job_id == job.id,
+                JobResult.result_type == result_type,
+            )
+        ).all()
+        for row in existing:
+            self.db.delete(row)
+        self.db.flush()
 
         try:
-            # Phase 8B: adapter validates gates/paths/runner availability and raises
-            # RealAnsibleBlockedError(code=phase8b_readiness_only) without calling
-            # ansible_runner.run(). Live apply is also blocked in the adapter.
-            run_with_ansible_runner(
+            result = run_with_ansible_runner(
                 job=job,
-                mode=mode,
+                mode="dry_run",
                 catalog=catalog_entry,
                 settings=self.settings,
             )
         except (RealAnsibleBlockedError, AnsibleRunnerMissingError, RealAnsibleNotImplementedError) as exc:
             reason = str(exc)
             code = getattr(exc, "code", "blocked")
-            _audit_blocked(reason, code)
+            # Safety-gate refusals are "blocked"; runner/parse problems are "failed".
+            gate_codes = {
+                "mock_mode",
+                "real_ansible_disabled",
+                "app_env_blocked",
+                "production_target",
+                "target_env_blocked",
+                "missing_environment",
+                "catalog_required",
+                "catalog_disabled",
+                "path_traversal",
+                "playbook_missing",
+                "inventory_missing",
+                "inventory_env_blocked",
+                "preflight_failed",
+                "apply_blocked_phase8c",
+                "empty_playbook_path",
+                "absolute_playbook_path",
+                "empty_inventory_path",
+                "absolute_inventory_path",
+            }
+            event = (
+                "real_dry_run_blocked"
+                if isinstance(exc, RealAnsibleBlockedError) and code in gate_codes
+                else "real_dry_run_failed"
+            )
+            job.status = JobStatus.DRY_RUN_FAILED.value
+            job.dry_run_status = JobStatus.DRY_RUN_FAILED.value
+            job.finished_at = datetime.now(UTC)
+            write_audit_log(
+                self.db,
+                actor=actor,
+                action="dry_run",
+                entity_type="execution_job",
+                entity_id=job.id,
+                role=role,
+                details={
+                    "event": event,
+                    "mock_mode": False,
+                    "mode": "dry_run",
+                    "reason": reason,
+                    "block_code": code,
+                    "used_ai_generated_playbook": False,
+                    "used_remediation_text": False,
+                    "execution_backend": "ansible-runner",
+                },
+                commit=False,
+            )
+            self.db.commit()
+            raise AnsibleExecutionError(reason) from exc
+        except Exception as exc:  # noqa: BLE001 — fail safely; never leave job running
+            reason = f"Real dry-run failed unexpectedly: {exc}"
+            job.status = JobStatus.DRY_RUN_FAILED.value
+            job.dry_run_status = JobStatus.DRY_RUN_FAILED.value
+            job.finished_at = datetime.now(UTC)
+            write_audit_log(
+                self.db,
+                actor=actor,
+                action="dry_run",
+                entity_type="execution_job",
+                entity_id=job.id,
+                role=role,
+                details={
+                    "event": "real_dry_run_failed",
+                    "mock_mode": False,
+                    "mode": "dry_run",
+                    "reason": reason,
+                    "block_code": "runner_error",
+                    "used_ai_generated_playbook": False,
+                    "used_remediation_text": False,
+                    "execution_backend": "ansible-runner",
+                },
+                commit=False,
+            )
+            self.db.commit()
             raise AnsibleExecutionError(reason) from exc
 
-        raise AnsibleExecutionError(
-            "Unreachable: Phase 8B real adapter must raise after readiness checks. "
-            "Keep MOCK_MODE=true for normal operator workflows."
+        # Map runner host outcomes onto job targets; persist result_type=dry_run.
+        targets_by_name = {
+            t.device_name: t for t in list(job.targets or []) if t.device_name
+        }
+        outcomes: list[tuple[ExecutionJobTarget, HostMockOutcome]] = []
+        for host in result.get("hosts") or []:
+            name = str(host.get("device_name") or "").strip()
+            if not name:
+                continue
+            target = targets_by_name.get(name)
+            if target is None:
+                # Persist orphan host from runner events as a synthetic target row status.
+                target = ExecutionJobTarget(
+                    job_id=job.id,
+                    device_name=name,
+                    ip_address=None,
+                    ansible_group=getattr(job, "ansible_group", None),
+                    status=str(host.get("status") or "success"),
+                )
+                self.db.add(target)
+                self.db.flush()
+            outcome = HostMockOutcome(
+                status=str(host.get("status") or "success"),
+                changed=bool(host.get("changed")),
+                skipped=bool(host.get("skipped")),
+                stdout=str(host.get("stdout") or ""),
+                stderr=str(host.get("stderr") or ""),
+                return_code=int(host.get("return_code") or 0),
+            )
+            outcomes.append((target, outcome))
+            target.status = outcome.status
+            self.db.add(
+                JobResult(
+                    job_id=job.id,
+                    result_type=result_type,
+                    device_name=name,
+                    status=outcome.status,
+                    changed=outcome.changed,
+                    skipped=outcome.skipped,
+                    stdout=outcome.stdout,
+                    stderr=outcome.stderr,
+                    return_code=outcome.return_code,
+                )
+            )
+
+        summary = self._finalize_job(
+            job=job,
+            mode="dry_run",
+            outcomes=outcomes,
+            mock_mode=False,
+            actor=actor,
+            role=role,
+            write_completion_audit=False,
         )
+        write_audit_log(
+            self.db,
+            actor=actor,
+            action="dry_run",
+            entity_type="execution_job",
+            entity_id=job.id,
+            role=role,
+            details={
+                "event": "real_dry_run_completed",
+                "mock_mode": False,
+                "mode": "dry_run",
+                "result_type": result_type,
+                "execution_backend": "ansible-runner",
+                "check_mode": True,
+                "cmdline": result.get("cmdline"),
+                "playbook": result.get("playbook"),
+                "inventory": result.get("inventory"),
+                "runner_status": result.get("status"),
+                "runner_rc": result.get("rc"),
+                "job_status": summary.job_status,
+                "hosts_total": summary.hosts_total,
+                "hosts_success": summary.hosts_success,
+                "hosts_failed": summary.hosts_failed,
+                "used_ai_generated_playbook": False,
+                "used_remediation_text": False,
+            },
+            commit=False,
+        )
+        self.db.commit()
+        return summary
 
 
 def summary_to_dict(summary: JobExecutionSummary) -> dict[str, Any]:

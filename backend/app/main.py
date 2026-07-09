@@ -93,7 +93,7 @@ def root(request: Request) -> dict[str, str]:
         "app": settings.app_name,
         "env": settings.app_env,
         "docs": "/docs",
-        "phase": "8b",
+        "phase": "8c",
         "auth": "MVP role tokens (VIEWER/OPERATOR/APPROVER/ADMIN) — not production SSO",
         "mock_mode": str(settings.mock_mode).lower(),
         "real_ansible_enabled": str(settings.real_ansible_enabled).lower(),

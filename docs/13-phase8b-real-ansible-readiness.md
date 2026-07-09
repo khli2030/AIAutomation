@@ -42,6 +42,8 @@ real execution by default. Keep `MOCK_MODE=true` and `REAL_ANSIBLE_ENABLED=false
 - Phase 8B validates readiness (gates, paths, ansible-runner package presence via
   `importlib.util.find_spec`) but **does not call** `ansible_runner.run()`.
   Live invocation is deferred until per-host result persistence exists.
+- Phase 8C adds lab-only **dry-run** via `ansible_runner.run(..., cmdline="--check")`
+  with `result_type=dry_run` persistence. Real apply/run remains blocked.
 - Preflight never imports `ansible_runner` (find_spec only) so MOCK_MODE workers
   stay free of forbidden modules.
 
