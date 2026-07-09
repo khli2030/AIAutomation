@@ -6,20 +6,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps for psycopg and Ansible Runner (same-server worker image).
+# System deps for PostgreSQL client libs and key-based Ansible SSH.
+# sshpass is intentionally NOT installed — use SSH keys only.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     openssh-client \
-    sshpass \
-    git \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Install ansible-core for Celery worker Ansible Runner usage (Phase 6).
-# Kept in the shared image so backend and worker use one Dockerfile for MVP.
+# ansible-core + ansible-runner for Celery worker (Phase 6 execution).
+# Host SSH keys are mounted at runtime — never copied into the image.
 RUN pip install "ansible-core>=2.16,<2.18" "ansible-runner>=2.3,<3"
 
 COPY . .

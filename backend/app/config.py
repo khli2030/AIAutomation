@@ -20,9 +20,13 @@ class Settings(BaseSettings):
     debug: bool = False
     secret_key: str = "change-me-in-production"
 
+    # Simple shared-token guard for non-health API routes (Phase 1 hardening).
+    # Set a strong value in .env — requests without this token are rejected.
+    admin_token: str = ""
+
     api_host: str = "0.0.0.0"
     api_port: int = 8000
-    cors_origins: str = "http://localhost:3000"
+    cors_origins: str = "http://127.0.0.1:3000,http://localhost:3000"
 
     database_url: str = (
         "postgresql+psycopg://compliance:compliance_change_me@db:5432/compliance"
@@ -35,6 +39,10 @@ class Settings(BaseSettings):
     ansible_home: str = "/opt/ansible"
     ansible_playbooks_dir: str = "/opt/ansible/playbooks"
     ansible_inventories_dir: str = "/opt/ansible/inventories"
+    # Ansible env override; default True (safe).
+    ansible_host_key_checking: bool = True
+
+    # Host paths map to ./data via docker-compose volume.
     upload_dir: str = "/var/lib/compliance/uploads"
     runner_private_data_dir: str = "/var/lib/compliance/ansible_private_data"
     tmp_inventory_dir: str = "/var/lib/compliance/tmp_inventories"
@@ -42,7 +50,7 @@ class Settings(BaseSettings):
     excel_chunk_size: int = 500
     job_batch_size: int = 75
 
-    # AI Analyzer is interface-only until explicitly configured.
+    # AI Analyzer is interface-only until explicitly configured (mock by default).
     ai_provider: str = "mock"
     ai_enabled: bool = False
     ai_api_key: str | None = None

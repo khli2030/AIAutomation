@@ -1,9 +1,16 @@
-"""FastAPI application entrypoint."""
+"""FastAPI application entrypoint (Phase 1 + security hardening)."""
 
-from fastapi import APIRouter, FastAPI, HTTPException, status
+from __future__ import annotations
+
+import json
+from collections.abc import Awaitable, Callable
+
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.router import api_router
+from app.auth import require_admin_token
 from app.config import get_settings
 
 settings = get_settings()
@@ -12,7 +19,9 @@ app = FastAPI(
     title=settings.app_name,
     description=(
         "Internal Linux Compliance Remediation Platform. "
-        "Excel Remediation text is never executed; only approved Ansible playbooks run."
+        "Excel Remediation text is never executed; only approved Ansible playbooks run. "
+        "Only /health is public; all other endpoints require ADMIN_TOKEN "
+        "(header X-Admin-Token or Authorization: Bearer)."
     ),
     version="0.1.0",
     debug=settings.debug,
@@ -26,9 +35,39 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+class AdminTokenMiddleware(BaseHTTPMiddleware):
+    """Reject unauthenticated requests to all paths except /health."""
+
+    async def dispatch(
+        self,
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        path = request.url.path.rstrip("/") or "/"
+        if path == "/health":
+            return await call_next(request)
+
+        try:
+            require_admin_token(
+                x_admin_token=request.headers.get("X-Admin-Token"),
+                authorization=request.headers.get("Authorization"),
+            )
+        except HTTPException as exc:
+            return Response(
+                content=json.dumps({"detail": exc.detail}),
+                status_code=exc.status_code,
+                media_type="application/json",
+                headers=dict(exc.headers or {}),
+            )
+        return await call_next(request)
+
+
+app.add_middleware(AdminTokenMiddleware)
+
 app.include_router(api_router)
 
-# Top-level needs-review route as specified in the API list.
+# Top-level needs-review route (protected by middleware).
 needs_review_router = APIRouter()
 
 
@@ -47,4 +86,5 @@ def root() -> dict[str, str]:
         "env": settings.app_env,
         "docs": "/docs",
         "phase": "1",
+        "auth": "ADMIN_TOKEN required for non-health endpoints",
     }
