@@ -43,7 +43,7 @@ def approve_job(
     body: JobReviewRequest | None = None,
     db: Session = Depends(get_db),
 ) -> ExecutionJobResponse:
-    """Approve only after dry_run_success. waiting_dry_run → 400 in Phase 5."""
+    """Approve only when status is dry_run_success. waiting_dry_run → 400 in Phase 5."""
     payload = body or JobReviewRequest()
     try:
         job = JobApprovalService(db).approve(job_id, reviewed_by=payload.reviewed_by)

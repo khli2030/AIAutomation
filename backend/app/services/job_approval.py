@@ -1,7 +1,7 @@
 """Phase 5 job approve / reject (no execution).
 
 Rules:
-- approve blocked unless status is dry_run_success (or waiting_approval after dry-run).
+- approve blocked unless status is exactly dry_run_success.
 - waiting_dry_run → approve returns error (dry-run not implemented yet).
 - reject allowed for waiting_dry_run, dry_run_failed, waiting_approval.
 - Never calls Ansible / MOCK / subprocess / SSH.
@@ -17,11 +17,10 @@ from app.constants.job_status import JobStatus
 from app.models.execution_job import ExecutionJob
 from app.services.audit import write_audit_log
 
-# Approve is only allowed after a successful dry-run path.
+# Approve is only allowed when dry-run has succeeded (exact status).
 APPROVABLE_STATUSES: frozenset[str] = frozenset(
     {
         JobStatus.DRY_RUN_SUCCESS.value,
-        JobStatus.WAITING_APPROVAL.value,
     }
 )
 
@@ -30,7 +29,6 @@ REJECTABLE_STATUSES: frozenset[str] = frozenset(
         JobStatus.WAITING_DRY_RUN.value,
         JobStatus.DRY_RUN_FAILED.value,
         JobStatus.WAITING_APPROVAL.value,
-        JobStatus.DRY_RUN_SUCCESS.value,
     }
 )
 
@@ -64,7 +62,7 @@ class JobApprovalService:
             )
         if job.status not in APPROVABLE_STATUSES:
             raise JobApprovalError(
-                f"Approve requires dry_run_success or waiting_approval "
+                f"Approve requires job status=dry_run_success "
                 f"(current status={job.status})"
             )
 
@@ -99,7 +97,7 @@ class JobApprovalService:
         if job.status not in REJECTABLE_STATUSES:
             raise JobApprovalError(
                 "Reject allowed only for waiting_dry_run, dry_run_failed, "
-                f"waiting_approval, or dry_run_success (current status={job.status})"
+                f"or waiting_approval (current status={job.status})"
             )
 
         actor = reviewed_by or "admin"

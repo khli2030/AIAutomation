@@ -175,6 +175,7 @@ def test_excluded_statuses_produce_no_jobs(status: str) -> None:
         assets=[_asset(device_name="host-1")],
     )
     assert result.job_count == 0
+    assert result.skipped_excluded_status == 1
     assert not any(isinstance(o, ExecutionJob) for o in added)
 
 
@@ -197,6 +198,62 @@ def test_disabled_catalog_task_code_skipped() -> None:
     )
     assert result.skipped_disabled_catalog == 1
     assert result.job_count == 0
+    assert not any(isinstance(o, ExecutionJob) for o in added)
+
+
+def test_environment_and_ansible_group_from_assets_not_excel() -> None:
+    """Job grouping metadata must come from assets, never from Excel fields."""
+    record = _record(device_name="host-1", criticality="High")
+    # Intentionally put misleading attrs on the record (Excel-like) — must be ignored.
+    record.environment = "excel-env-should-be-ignored"
+    record.ansible_group = "excel-group-should-be-ignored"
+
+    result, added, _db = _run_generate(
+        [record],
+        assets=[
+            _asset(
+                device_name="host-1",
+                environment="prod-from-asset",
+                ansible_group="group-from-asset",
+            )
+        ],
+    )
+    jobs = [o for o in added if isinstance(o, ExecutionJob)]
+    assert result.job_count == 1
+    assert jobs[0].environment == "prod-from-asset"
+    assert jobs[0].ansible_group == "group-from-asset"
+    assert jobs[0].environment != "excel-env-should-be-ignored"
+    assert jobs[0].ansible_group != "excel-group-should-be-ignored"
+
+
+@pytest.mark.parametrize(
+    ("environment", "ansible_group"),
+    [
+        (None, "linux_servers"),
+        ("", "linux_servers"),
+        ("prod", None),
+        ("prod", ""),
+        (None, None),
+        ("  ", "  "),
+    ],
+)
+def test_missing_asset_environment_or_group_skipped(
+    environment: str | None,
+    ansible_group: str | None,
+) -> None:
+    result, added, _db = _run_generate(
+        [_record(device_name="host-1")],
+        assets=[
+            _asset(
+                device_name="host-1",
+                environment=environment,
+                ansible_group=ansible_group,
+            )
+        ],
+    )
+    assert result.job_count == 0
+    assert result.skipped_missing_asset_metadata == 1
+    assert result.skipped_records == 1
     assert not any(isinstance(o, ExecutionJob) for o in added)
 
 
@@ -238,6 +295,8 @@ def test_jobs_group_by_task_env_crit_group() -> None:
     low_targets = [t for t in targets if t.job_id == low_job.id]
     assert len(high_targets) == 2
     assert len(low_targets) == 1
+    assert all(j.environment == "prod" for j in jobs)
+    assert all(j.ansible_group == "g1" for j in jobs)
 
 
 def test_jobs_split_at_100_targets() -> None:
@@ -276,28 +335,14 @@ def test_job_status_starts_waiting_dry_run() -> None:
     assert result.plan.status in {"generated", "empty"} or result.job_count == 1
 
 
-def test_approve_blocked_for_waiting_dry_run() -> None:
-    job = SimpleNamespace(
-        id=1,
-        plan_id=9,
-        task_code="SSH_DISABLE_ROOT_LOGIN",
-        status=JobStatus.WAITING_DRY_RUN.value,
-        approved_by=None,
-        approved_at=None,
-    )
-    db = MagicMock()
-    db.get.return_value = job
-    with pytest.raises(JobApprovalError, match="waiting_dry_run"):
-        JobApprovalService(db).approve(1, reviewed_by="alice")
-    db.commit.assert_not_called()
-
-
-def test_approve_blocked_before_dry_run_success() -> None:
+def test_approve_blocked_unless_dry_run_success() -> None:
     for status in (
         JobStatus.WAITING_DRY_RUN.value,
         JobStatus.DRY_RUN_RUNNING.value,
         JobStatus.DRY_RUN_FAILED.value,
+        JobStatus.WAITING_APPROVAL.value,
         JobStatus.DRAFT.value,
+        JobStatus.APPROVED.value,
     ):
         job = SimpleNamespace(
             id=1,
@@ -314,8 +359,7 @@ def test_approve_blocked_before_dry_run_success() -> None:
         db.commit.assert_not_called()
 
 
-def test_approve_allowed_after_dry_run_success() -> None:
-    """Phase 5 does not run dry-run, but approve path must accept dry_run_success."""
+def test_approve_allowed_only_for_dry_run_success() -> None:
     job = SimpleNamespace(
         id=1,
         plan_id=9,
@@ -329,23 +373,6 @@ def test_approve_allowed_after_dry_run_success() -> None:
     out = JobApprovalService(db).approve(1, reviewed_by="alice")
     assert out.status == JobStatus.APPROVED.value
     assert out.approved_by == "alice"
-    db.commit.assert_called_once()
-
-
-def test_reject_works_for_waiting_dry_run() -> None:
-    job = SimpleNamespace(
-        id=1,
-        plan_id=9,
-        task_code="SSH_DISABLE_ROOT_LOGIN",
-        status=JobStatus.WAITING_DRY_RUN.value,
-        approved_by=None,
-        approved_at=None,
-    )
-    db = MagicMock()
-    db.get.return_value = job
-    out = JobApprovalService(db).reject(1, reviewed_by="bob")
-    assert out.status == JobStatus.REJECTED.value
-    assert out.approved_by == "bob"
     db.commit.assert_called_once()
 
 
@@ -368,16 +395,26 @@ def test_reject_works_for_allowed_statuses(status: str) -> None:
     )
     db = MagicMock()
     db.get.return_value = job
-    out = JobApprovalService(db).reject(1)
+    out = JobApprovalService(db).reject(1, reviewed_by="bob")
     assert out.status == JobStatus.REJECTED.value
+    assert out.approved_by == "bob"
+    db.commit.assert_called_once()
 
 
-def test_phase5_never_uses_ai_generated_playbook() -> None:
-    src = Path(__file__).resolve().parents[2] / "app" / "services" / "plan_generator.py"
-    text = src.read_text(encoding="utf-8")
-    assert "generated_playbook" not in text or "used_ai_generated_playbook" in text
-    assert "AIRemediationSuggestion" not in text
-    assert "ai_remediation" not in text
+def test_phase5_never_uses_ai_generated_playbook_or_suggestions() -> None:
+    import app.api.execution_jobs as jobs_api
+    import app.api.execution_plans as plans_api
+    import app.services.job_approval as approval_mod
+    import app.services.plan_generator as generator_mod
+
+    for mod in (generator_mod, approval_mod, plans_api, jobs_api):
+        roots = _imported_roots(mod.__file__)
+        assert "ai_suggestions" not in roots
+        assert "ai_analyzer" not in roots
+        assert "ai_remediation_suggestion" not in roots
+        src = Path(mod.__file__).read_text(encoding="utf-8")
+        assert "AIRemediationSuggestion" not in src
+        assert "generated_playbook" not in src or "used_ai_generated_playbook" in src
 
 
 def test_phase5_modules_no_ansible_mock_subprocess_ssh() -> None:
@@ -416,3 +453,5 @@ def test_phase5_modules_no_ansible_mock_subprocess_ssh() -> None:
     assert "PlanGeneratorService" in body
     assert "AnsibleExecutionService" not in body
     assert "MockAIProvider" not in body
+    assert "dry_run_job" not in body
+    assert "run_job" not in body

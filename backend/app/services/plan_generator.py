@@ -70,6 +70,7 @@ class PlanGenerationResult:
     skipped_missing_catalog: int = 0
     skipped_disabled_catalog: int = 0
     skipped_missing_asset: int = 0
+    skipped_missing_asset_metadata: int = 0
     skipped_excluded_status: int = 0
 
 
@@ -164,11 +165,19 @@ class PlanGeneratorService:
                 result.skipped_records += 1
                 continue
 
+            # environment / ansible_group come only from assets — never guessed from Excel.
+            environment = (asset.environment or "").strip() or None
+            ansible_group = (asset.ansible_group or "").strip() or None
+            if environment is None or ansible_group is None:
+                result.skipped_missing_asset_metadata += 1
+                result.skipped_records += 1
+                continue
+
             key = GroupKey(
                 task_code=task_code,
-                environment=asset.environment,
+                environment=environment,
                 criticality=record.criticality,
-                ansible_group=asset.ansible_group,
+                ansible_group=ansible_group,
             )
             device_key = device.lower()
             if device_key in seen_devices_in_group[key]:
@@ -179,7 +188,7 @@ class PlanGeneratorService:
                 TargetCandidate(
                     device_name=device,
                     ip_address=asset.ip_address,
-                    ansible_group=asset.ansible_group,
+                    ansible_group=ansible_group,
                 )
             )
 
@@ -241,6 +250,8 @@ class PlanGeneratorService:
                 "skipped_records": result.skipped_records,
                 "skipped_missing_catalog": result.skipped_missing_catalog,
                 "skipped_disabled_catalog": result.skipped_disabled_catalog,
+                "skipped_missing_asset": result.skipped_missing_asset,
+                "skipped_missing_asset_metadata": result.skipped_missing_asset_metadata,
                 "used_ai_generated_playbook": False,
             },
         )

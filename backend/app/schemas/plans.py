@@ -17,6 +17,11 @@ class ExecutionPlanResponse(BaseModel):
     target_count: int = 0
     skipped_records: int = 0
     ready_for_plan_records: int = 0
+    skipped_missing_catalog: int = 0
+    skipped_disabled_catalog: int = 0
+    skipped_missing_asset: int = 0
+    skipped_missing_asset_metadata: int = 0
+    skipped_excluded_status: int = 0
 
 
 class GeneratePlanResponse(BaseModel):

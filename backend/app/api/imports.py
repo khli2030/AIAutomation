@@ -204,5 +204,10 @@ def generate_plan(
             target_count=result.target_count,
             skipped_records=result.skipped_records,
             ready_for_plan_records=result.ready_for_plan_records,
+            skipped_missing_catalog=result.skipped_missing_catalog,
+            skipped_disabled_catalog=result.skipped_disabled_catalog,
+            skipped_missing_asset=result.skipped_missing_asset,
+            skipped_missing_asset_metadata=result.skipped_missing_asset_metadata,
+            skipped_excluded_status=result.skipped_excluded_status,
         )
     )
