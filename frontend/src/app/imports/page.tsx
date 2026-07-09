@@ -12,8 +12,12 @@ import {
 } from "@/lib/api";
 import type { ImportBatch, ValidationSummary } from "@/types/api";
 import { ErrorBox, StatusBadge, SuccessBox } from "@/components/Ui";
+import { useAuth } from "@/hooks/useAuth";
 
 function ImportsInner() {
+  const { auth } = useAuth();
+  const canValidate = Boolean(auth?.can_validate);
+  const canPlan = Boolean(auth?.can_generate_plan);
   const params = useSearchParams();
   const initialId = params.get("batchId");
   const [batches, setBatches] = useState<ImportBatch[]>([]);
@@ -26,8 +30,8 @@ function ImportsInner() {
   const [busy, setBusy] = useState(false);
 
   const canGeneratePlan = useMemo(() => {
-    return Boolean(validation && validation.ready_for_plan > 0);
-  }, [validation]);
+    return Boolean(canPlan && validation && validation.ready_for_plan > 0);
+  }, [canPlan, validation]);
 
   async function refreshList() {
     const res = await listImports(100, 0);
@@ -104,7 +108,7 @@ function ImportsInner() {
     setError(null);
     setMessage(null);
     try {
-      const result = await generatePlan(batch.id, "ui-operator");
+      const result = await generatePlan(batch.id, auth?.actor || "ui-operator");
       setPlanId(result.plan.id);
       setMessage(
         `Plan #${result.plan.id} created with ${result.plan.job_count} job(s), ${result.plan.target_count} target(s).`,
@@ -181,12 +185,23 @@ function ImportsInner() {
           {batch.error_message ? (
             <p className="error">{batch.error_message}</p>
           ) : null}
+          {!canValidate && !canPlan ? (
+            <div className="safety-note">
+              Validate / generate-plan require operator or admin. Current role:{" "}
+              <code>{auth?.role || "unknown"}</code>.
+            </div>
+          ) : null}
           <div className="btn-row">
             <button
               className="btn primary"
               type="button"
-              disabled={busy || batch.status !== "parsed"}
+              disabled={busy || !canValidate || batch.status !== "parsed"}
               onClick={() => void onValidate()}
+              title={
+                canValidate
+                  ? "Validate batch"
+                  : "Requires operator or admin"
+              }
             >
               Validate batch
             </button>
@@ -195,6 +210,11 @@ function ImportsInner() {
               type="button"
               disabled={busy || !canGeneratePlan}
               onClick={() => void onGeneratePlan()}
+              title={
+                canPlan
+                  ? "Generate plan"
+                  : "Requires operator or admin"
+              }
             >
               Generate plan
             </button>

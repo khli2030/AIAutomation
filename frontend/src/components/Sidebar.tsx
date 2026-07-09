@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { RoleBadge } from "@/components/RoleBadge";
 
 const LINKS = [
   { href: "/", label: "Dashboard" },
@@ -13,7 +14,7 @@ const LINKS = [
   { href: "/plans", label: "Execution Plans" },
   { href: "/approvals", label: "Job Approval" },
   { href: "/jobs", label: "Job Results" },
-  { href: "/settings", label: "Settings" },
+  { href: "/settings", label: "Settings / Login" },
 ];
 
 export function Sidebar() {
@@ -23,7 +24,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="brand">
         Compliance Remediation
-        <span>Internal operator console · Phase 7</span>
+        <span>Internal operator console · Phase 8A</span>
       </div>
       <nav className="nav" aria-label="Primary">
         {LINKS.map((link) => {
@@ -42,10 +43,13 @@ export function Sidebar() {
           );
         })}
       </nav>
-      <p className="muted" style={{ fontSize: "0.75rem", marginTop: "auto" }}>
-        Playbooks are read-only. Excel Remediation text is never executed.
-        AI drafts stay non-executable.
-      </p>
+      <div style={{ marginTop: "auto" }}>
+        <RoleBadge />
+        <p className="muted" style={{ fontSize: "0.75rem", marginTop: "0.75rem" }}>
+          Playbooks are read-only. Excel Remediation text is never executed.
+          AI drafts stay non-executable. Token auth is MVP-only.
+        </p>
+      </div>
     </aside>
   );
 }

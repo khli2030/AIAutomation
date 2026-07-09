@@ -1,4 +1,4 @@
-# Compliance Remediation — Frontend (Phase 7)
+# Compliance Remediation — Frontend (Phase 7 + 8A)
 
 Internal Next.js operator console for the Linux Compliance Remediation Platform.
 
@@ -9,12 +9,16 @@ Internal Next.js operator console for the Linux Compliance Remediation Platform.
 - Excel Remediation text is display-only.
 - AI `generated_playbook` is read-only; convert-to-catalog always sends `enable: false`.
 - No playbook editor.
-- **`ADMIN_TOKEN` is never hardcoded** — paste into Settings (sessionStorage) or set `NEXT_PUBLIC_ADMIN_TOKEN` only in gitignored `.env.local`.
-- **sessionStorage token is MVP / lab-only** — not production authentication. Production needs real auth (SSO/OIDC/RBAC) behind TLS; do not treat the shared admin token as a security boundary.
+- **Role tokens are never hardcoded** — paste into Settings / Login (sessionStorage) or set `NEXT_PUBLIC_ADMIN_TOKEN` only in gitignored `.env.local`.
+- **sessionStorage token is MVP / lab-only** — not production authentication. Production needs real auth (SSO/OIDC/RBAC) behind TLS.
+
+## Auth (Phase 8A)
+
+Paste any of `VIEWER_TOKEN` / `OPERATOR_TOKEN` / `APPROVER_TOKEN` / `ADMIN_TOKEN`. The UI calls `/auth/me` to show the current role and disable buttons the role cannot use. See [`docs/12-phase8a-rbac.md`](../docs/12-phase8a-rbac.md).
 
 ## Local run
 
-Prerequisites: backend API on `http://127.0.0.1:8000` with `ADMIN_TOKEN` set.
+Prerequisites: backend API on `http://127.0.0.1:8000` with role tokens set.
 
 ```bash
 cd frontend
@@ -25,7 +29,7 @@ npm install
 npm run dev
 ```
 
-Open `http://127.0.0.1:3000`, go to **Settings**, paste `ADMIN_TOKEN` from the backend `.env`.
+Open `http://127.0.0.1:3000`, go to **Settings / Login**, paste a role token from the backend `.env`.
 
 ### Compose (optional profile)
 
@@ -40,15 +44,15 @@ Compose sets `NEXT_PUBLIC_API_URL=http://127.0.0.1:8000` (browser → host loopb
 | Route | Purpose |
 |-------|---------|
 | `/` | Dashboard counters + latest imports/jobs |
-| `/upload` | Upload `.xlsx`, show `batch_id` + status |
-| `/imports` | Batch summary, validate, generate plan |
+| `/upload` | Upload `.xlsx` (operator/admin) |
+| `/imports` | Batch summary, validate, generate plan (operator/admin) |
 | `/records` | Filter records; show remediation / expected config |
-| `/needs-review` | NEEDS_REVIEW list + AI analyze |
-| `/ai-suggestions` | Approve / reject / convert (disabled catalog) |
+| `/needs-review` | NEEDS_REVIEW list + AI analyze (operator/admin) |
+| `/ai-suggestions` | Approve / reject (approver/admin); convert admin-only |
 | `/plans` | List plans + jobs |
-| `/approvals` | Mock dry-run, approve after success, reject, mock run |
+| `/approvals` | Mock dry-run/run (operator/admin); approve/reject (approver/admin) |
 | `/jobs/[id]` | Dry-run vs run results via `result_type` |
-| `/settings` | API URL (read-only) + token sessionStorage |
+| `/settings` | Role token login + `/auth/me` role display |
 
 ## Tests
 
@@ -66,11 +70,9 @@ Full manual UI workflow (real backend + frontend): see
 
 ## Manual test checklist
 
-1. Set token in Settings; confirm MOCK_MODE banner.
-2. Upload sample Excel → note `batch_id`.
-3. Import Summary → wait for `parsed` → Validate → Generate plan.
-4. Records Review → filter by `READY_FOR_PLAN` / device.
-5. Needs Review → AI analyze (mock) → AI Suggestions approve/reject/convert (`is_enabled=false`).
-6. Plans → open jobs → Job Approval → mock dry-run → confirm `result_type=dry_run` → Approve → mock run.
-7. Job Results → dry_run and run sections separate; expand stdout/stderr.
-8. Confirm no playbook edit controls exist anywhere.
+1. Set a role token in Settings; confirm role badge + MOCK_MODE banner.
+2. As viewer: confirm mutate buttons disabled; reads work.
+3. As operator: upload → validate → plan → dry-run → run; approve disabled.
+4. As approver: approve/reject jobs and suggestions; upload/convert disabled.
+5. As admin: convert-to-catalog (`is_enabled=false`) works.
+6. Confirm no playbook edit controls exist anywhere.

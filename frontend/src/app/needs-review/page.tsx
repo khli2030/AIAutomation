@@ -11,8 +11,11 @@ import {
 } from "@/lib/api";
 import type { ImportBatch, RawImportRecord } from "@/types/api";
 import { ErrorBox, StatusBadge, SuccessBox } from "@/components/Ui";
+import { useAuth } from "@/hooks/useAuth";
 
 function NeedsReviewInner() {
+  const { auth } = useAuth();
+  const canAnalyze = Boolean(auth?.can_ai_analyze);
   const params = useSearchParams();
   const [batches, setBatches] = useState<ImportBatch[]>([]);
   const [batchId, setBatchId] = useState(params.get("batchId") || "");
@@ -105,8 +108,13 @@ function NeedsReviewInner() {
           <button
             className="btn primary"
             type="button"
-            disabled={busy || !batchId}
+            disabled={busy || !batchId || !canAnalyze}
             onClick={() => void onAnalyze()}
+            title={
+              canAnalyze
+                ? "Run AI analysis"
+                : "Requires operator or admin"
+            }
           >
             {busy ? "Analyzing…" : "Run AI analysis for batch"}
           </button>
@@ -114,6 +122,12 @@ function NeedsReviewInner() {
             Open AI suggestions
           </Link>
         </div>
+        {!canAnalyze ? (
+          <div className="safety-note">
+            AI analysis requires operator or admin. Current role:{" "}
+            <code>{auth?.role || "unknown"}</code>.
+          </div>
+        ) : null}
       </div>
       <div className="panel">
         <h2>NEEDS_REVIEW records ({records.length})</h2>
