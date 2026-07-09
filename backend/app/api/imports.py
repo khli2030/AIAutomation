@@ -18,6 +18,7 @@ from app.schemas.imports import (
     RawImportRecordResponse,
     ValidationSummaryResponse,
 )
+from app.schemas.plans import ExecutionPlanResponse, GeneratePlanResponse
 from app.services.ai_analyzer import AIAnalyzerService
 from app.services.import_service import (
     ImportUploadError,
@@ -25,6 +26,7 @@ from app.services.import_service import (
     finalize_upload_audit,
     save_upload_for_batch,
 )
+from app.services.plan_generator import PlanGeneratorService
 from app.services.validator import RecordValidationService
 from app.workers.tasks_import import parse_excel_batch
 
@@ -166,7 +168,46 @@ def ai_analyze_needs_review(
     return AIAnalyzeSummaryResponse(**summary.to_dict())
 
 
-@router.post("/{batch_id}/generate-plan", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def generate_plan(batch_id: int) -> None:
-    """POST /imports/{batch_id}/generate-plan — Phase 5."""
-    raise HTTPException(status_code=501, detail="Not implemented yet (Phase 5)")
+@router.post(
+    "/{batch_id}/generate-plan",
+    response_model=GeneratePlanResponse,
+    status_code=status.HTTP_200_OK,
+)
+def generate_plan(
+    batch_id: int,
+    created_by: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> GeneratePlanResponse:
+    """Generate execution plan from READY_FOR_PLAN records only (Phase 5).
+
+    Creates jobs with status=waiting_dry_run. Does not dry-run, run, or call Ansible/MOCK.
+    Never uses AI generated_playbook.
+    """
+    batch = db.get(ImportBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import batch not found")
+
+    try:
+        result = PlanGeneratorService(db).generate_plan(batch_id, created_by=created_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    plan = result.plan
+    return GeneratePlanResponse(
+        plan=ExecutionPlanResponse(
+            id=plan.id,
+            batch_id=plan.batch_id,
+            status=plan.status,
+            created_by=plan.created_by,
+            created_at=plan.created_at,
+            job_count=result.job_count,
+            target_count=result.target_count,
+            skipped_records=result.skipped_records,
+            ready_for_plan_records=result.ready_for_plan_records,
+            skipped_missing_catalog=result.skipped_missing_catalog,
+            skipped_disabled_catalog=result.skipped_disabled_catalog,
+            skipped_missing_asset=result.skipped_missing_asset,
+            skipped_missing_asset_metadata=result.skipped_missing_asset_metadata,
+            skipped_excluded_status=result.skipped_excluded_status,
+        )
+    )
