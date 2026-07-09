@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings, get_settings
+from app.constants.job_result_type import JobResultType
 from app.constants.job_status import JobStatus
 from app.models.execution_job import ExecutionJob
 from app.models.execution_job_target import ExecutionJobTarget
@@ -32,6 +33,11 @@ from app.services.audit import write_audit_log
 logger = logging.getLogger(__name__)
 
 ExecutionMode = Literal["dry_run", "apply"]
+
+
+def _result_type_for_mode(mode: ExecutionMode) -> str:
+    """Map execution mode to persisted job_results.result_type."""
+    return JobResultType.DRY_RUN.value if mode == "dry_run" else JobResultType.RUN.value
 
 # Modules that must never be loaded/used while MOCK_MODE=true.
 _FORBIDDEN_MODULES_WHEN_MOCK: frozenset[str] = frozenset(
@@ -113,10 +119,16 @@ class AnsibleExecutionService:
 
     def _assert_job_status_allows(self, *, job: ExecutionJob, mode: ExecutionMode) -> None:
         if mode == "dry_run":
-            if job.status != JobStatus.WAITING_DRY_RUN.value:
+            # First dry-run: waiting_dry_run. Retry after failure: dry_run_failed
+            # (replaces previous dry_run result_type rows only).
+            allowed = {
+                JobStatus.WAITING_DRY_RUN.value,
+                JobStatus.DRY_RUN_FAILED.value,
+            }
+            if job.status not in allowed:
                 raise AnsibleExecutionError(
-                    "Dry-run allowed only when job status=waiting_dry_run "
-                    f"(current status={job.status})"
+                    "Dry-run allowed only when job status is waiting_dry_run "
+                    f"or dry_run_failed (current status={job.status})"
                 )
             return
         if job.status != JobStatus.APPROVED.value:
@@ -210,13 +222,14 @@ class AnsibleExecutionService:
         write_audit_log(
             self.db,
             actor="system",
-            action="dry_run" if mode == "dry_run" else "execute",
+            action="dry_run" if mode == "dry_run" else "run",
             entity_type="execution_job",
             entity_id=job.id,
             details={
                 "event": "started",
                 "mock_mode": True,
                 "mode": mode,
+                "result_type": _result_type_for_mode(mode),
                 "task_code": job.task_code,
                 "ansible_playbook_path": playbook_path,
                 "used_ai_generated_playbook": False,
@@ -224,9 +237,14 @@ class AnsibleExecutionService:
             },
         )
 
-        # Clear previous results for this mode re-run (simple MVP behaviour).
+        # Replace previous results for THIS mode only — never wipe the other type.
+        # Dry-run re-run (if status allows) replaces dry_run rows; run never deletes dry_run.
+        result_type = _result_type_for_mode(mode)
         existing = self.db.scalars(
-            select(JobResult).where(JobResult.job_id == job.id)
+            select(JobResult).where(
+                JobResult.job_id == job.id,
+                JobResult.result_type == result_type,
+            )
         ).all()
         for row in existing:
             self.db.delete(row)
@@ -257,6 +275,7 @@ class AnsibleExecutionService:
             self.db.add(
                 JobResult(
                     job_id=job.id,
+                    result_type=result_type,
                     device_name=target.device_name,
                     status=outcome.status,
                     changed=outcome.changed,
@@ -424,13 +443,14 @@ class AnsibleExecutionService:
         write_audit_log(
             self.db,
             actor="system",
-            action="dry_run" if mode == "dry_run" else "execute",
+            action="dry_run" if mode == "dry_run" else "run",
             entity_type="execution_job",
             entity_id=job.id,
             details={
                 "event": "completed",
                 "mock_mode": mock_mode,
                 "mode": mode,
+                "result_type": _result_type_for_mode(mode),
                 "execution_backend": "mock" if mock_mode else "real",
                 "job_status": job.status,
                 "dry_run_status": job.dry_run_status,

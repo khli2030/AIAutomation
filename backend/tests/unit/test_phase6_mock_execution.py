@@ -135,7 +135,7 @@ def _service_with_job(
     return service, db
 
 
-def test_dry_run_blocked_unless_waiting_dry_run() -> None:
+def test_dry_run_blocked_unless_waiting_dry_run_or_failed() -> None:
     for status in (
         JobStatus.DRY_RUN_SUCCESS.value,
         JobStatus.APPROVED.value,
@@ -146,6 +146,16 @@ def test_dry_run_blocked_unless_waiting_dry_run() -> None:
         service, _db = _service_with_job(job)
         with pytest.raises(AnsibleExecutionError, match="waiting_dry_run"):
             service.dry_run_job(1)
+
+
+def test_dry_run_retry_allowed_after_dry_run_failed() -> None:
+    job = _job(status=JobStatus.DRY_RUN_FAILED.value, targets=[_target("h0")])
+    service, db = _service_with_job(job)
+    summary = service.dry_run_job(1)
+    assert summary.mock_mode is True
+    results = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], JobResult)]
+    assert results
+    assert all(r.result_type == "dry_run" for r in results)
 
 
 def test_dry_run_creates_per_host_mock_results() -> None:
@@ -160,6 +170,7 @@ def test_dry_run_creates_per_host_mock_results() -> None:
     assert len(results) == 3
     assert {r.device_name for r in results} == {"host-a", "host-b", "host-c"}
     assert all(isinstance(r.stdout, str) and r.stdout for r in results)
+    assert all(r.result_type == "dry_run" for r in results)
 
 
 def test_dry_run_updates_job_status_success() -> None:
@@ -241,6 +252,58 @@ def test_run_creates_per_host_mock_results() -> None:
     assert summary.hosts_total == 2
     results = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], JobResult)]
     assert len(results) == 2
+    assert all(r.result_type == "run" for r in results)
+
+
+def test_run_does_not_delete_dry_run_results() -> None:
+    """Run must only replace result_type=run rows, never dry_run rows."""
+    from app.constants.job_result_type import JobResultType
+
+    targets = [_target("host-a")]
+    job = _job(status=JobStatus.APPROVED.value, targets=targets)
+    dry_run_row = SimpleNamespace(
+        id=99,
+        job_id=1,
+        result_type=JobResultType.DRY_RUN.value,
+        device_name="host-a",
+    )
+    db = MagicMock()
+    catalog = _catalog()
+    # load job, catalog, existing run-type results (empty)
+    db.scalars.side_effect = [
+        ScalarsResult([job]),
+        ScalarsResult([catalog]),
+        ScalarsResult([]),  # existing run results to replace
+    ]
+    service = AnsibleExecutionService(db, settings=_settings(mock_mode=True))
+    service.run_job(1)
+
+    # Ensure delete was never called on the dry_run row object
+    deleted = [c.args[0] for c in db.delete.call_args_list]
+    assert dry_run_row not in deleted
+    results = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], JobResult)]
+    assert results
+    assert all(r.result_type == JobResultType.RUN.value for r in results)
+
+
+def test_dry_run_replaces_only_dry_run_results() -> None:
+    from app.constants.job_result_type import JobResultType
+
+    job = _job(status=JobStatus.DRY_RUN_FAILED.value, targets=[_target("host-a")])
+    old_dry = SimpleNamespace(id=1, result_type=JobResultType.DRY_RUN.value)
+    db = MagicMock()
+    catalog = _catalog()
+    db.scalars.side_effect = [
+        ScalarsResult([job]),
+        ScalarsResult([catalog]),
+        ScalarsResult([old_dry]),  # previous dry_run rows replaced
+    ]
+    service = AnsibleExecutionService(db, settings=_settings(mock_mode=True))
+    service.dry_run_job(1)
+    deleted = [c.args[0] for c in db.delete.call_args_list]
+    assert old_dry in deleted
+    results = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], JobResult)]
+    assert all(r.result_type == JobResultType.DRY_RUN.value for r in results)
 
 
 def test_run_final_status_success() -> None:
@@ -368,3 +431,126 @@ def test_mock_uses_catalog_playbook_path_not_ai() -> None:
     results = [c.args[0] for c in db.add.call_args_list if isinstance(c.args[0], JobResult)]
     assert results
     assert "from_catalog.yml" in (results[0].stdout or "")
+
+
+def test_get_results_filters_by_result_type() -> None:
+    from datetime import UTC, datetime
+
+    from app.api.execution_jobs import get_job_results
+    from app.constants.job_result_type import JobResultType
+
+    now = datetime.now(UTC)
+    job = SimpleNamespace(
+        id=1,
+        status=JobStatus.SUCCESS.value,
+        dry_run_status=JobStatus.DRY_RUN_SUCCESS.value,
+    )
+    dry = SimpleNamespace(
+        id=1,
+        job_id=1,
+        result_type=JobResultType.DRY_RUN.value,
+        device_name="h1",
+        status="success",
+        changed=False,
+        skipped=False,
+        stdout="dry",
+        stderr="",
+        return_code=0,
+        created_at=now,
+    )
+    run = SimpleNamespace(
+        id=2,
+        job_id=1,
+        result_type=JobResultType.RUN.value,
+        device_name="h1",
+        status="success",
+        changed=True,
+        skipped=False,
+        stdout="run",
+        stderr="",
+        return_code=0,
+        created_at=now,
+    )
+    db = MagicMock()
+    db.get.return_value = job
+    db.scalars.return_value = ScalarsResult([dry])
+
+    out = get_job_results(1, result_type="dry_run", db=db)
+    assert out.result_type_filter == "dry_run"
+    assert out.total == 1
+    assert out.items[0].result_type == "dry_run"
+
+    db.scalars.return_value = ScalarsResult([run])
+    out_run = get_job_results(1, result_type="run", db=db)
+    assert out_run.result_type_filter == "run"
+    assert out_run.items[0].result_type == "run"
+
+
+def test_mock_mode_false_returns_not_implemented() -> None:
+    job = _job(status=JobStatus.WAITING_DRY_RUN.value, targets=[_target("h0")])
+    catalog = _catalog()
+    db = MagicMock()
+    db.scalars.side_effect = [
+        ScalarsResult([job]),
+        ScalarsResult([catalog]),
+    ]
+    service = AnsibleExecutionService(db, settings=_settings(mock_mode=False))
+    with pytest.raises(AnsibleExecutionError, match="not implemented yet"):
+        service.dry_run_job(1)
+
+
+def test_audit_logs_for_dry_run_approve_reject_run() -> None:
+    # dry-run audits
+    job = _job(status=JobStatus.WAITING_DRY_RUN.value, targets=[_target("h0")])
+    service, db = _service_with_job(job)
+    service.dry_run_job(1)
+    audit_actions = []
+    for c in db.add.call_args_list:
+        obj = c.args[0]
+        action = getattr(obj, "action", None)
+        if action:
+            audit_actions.append(action)
+    assert "dry_run" in audit_actions
+
+    # approve audit
+    approve_job = SimpleNamespace(
+        id=2,
+        plan_id=9,
+        task_code="SSH_DISABLE_ROOT_LOGIN",
+        status=JobStatus.DRY_RUN_SUCCESS.value,
+        approved_by=None,
+        approved_at=None,
+    )
+    db2 = MagicMock()
+    db2.get.return_value = approve_job
+    JobApprovalService(db2).approve(2, reviewed_by="alice")
+    approve_actions = [
+        getattr(c.args[0], "action", None) for c in db2.add.call_args_list
+    ]
+    assert "approve" in approve_actions
+
+    # reject audit
+    reject_job = SimpleNamespace(
+        id=3,
+        plan_id=9,
+        task_code="SSH_DISABLE_ROOT_LOGIN",
+        status=JobStatus.WAITING_DRY_RUN.value,
+        approved_by=None,
+        approved_at=None,
+    )
+    db3 = MagicMock()
+    db3.get.return_value = reject_job
+    JobApprovalService(db3).reject(3, reviewed_by="bob")
+    reject_actions = [
+        getattr(c.args[0], "action", None) for c in db3.add.call_args_list
+    ]
+    assert "reject" in reject_actions
+
+    # run audit
+    run_job_obj = _job(status=JobStatus.APPROVED.value, targets=[_target("h0")])
+    service4, db4 = _service_with_job(run_job_obj)
+    service4.run_job(1)
+    run_actions = [
+        getattr(c.args[0], "action", None) for c in db4.add.call_args_list
+    ]
+    assert "run" in run_actions

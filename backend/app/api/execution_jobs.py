@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.constants.job_result_type import JobResultType
 from app.db.session import get_db
 from app.models.execution_job import ExecutionJob
 from app.models.job_result import JobResult
@@ -140,23 +141,38 @@ def run_job(
 @router.get("/{job_id}/results", response_model=JobResultsListResponse)
 def get_job_results(
     job_id: int,
+    result_type: str | None = Query(
+        default=None,
+        description="Filter by result_type: dry_run or run. Omit to return both.",
+    ),
     db: Session = Depends(get_db),
 ) -> JobResultsListResponse:
-    """GET /execution-jobs/{job_id}/results — per-host mock/real results."""
+    """GET /execution-jobs/{job_id}/results — per-host mock/real results.
+
+    Use ?result_type=dry_run or ?result_type=run to separate dry-run vs apply results.
+    """
     job = db.get(ExecutionJob, job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution job not found")
 
-    rows = db.scalars(
-        select(JobResult)
-        .where(JobResult.job_id == job_id)
-        .order_by(JobResult.id.asc())
-    ).all()
+    if result_type is not None:
+        allowed = {JobResultType.DRY_RUN.value, JobResultType.RUN.value}
+        if result_type not in allowed:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"result_type must be one of: {', '.join(sorted(allowed))}",
+            )
+
+    query = select(JobResult).where(JobResult.job_id == job_id)
+    if result_type is not None:
+        query = query.where(JobResult.result_type == result_type)
+    rows = db.scalars(query.order_by(JobResult.id.asc())).all()
 
     return JobResultsListResponse(
         job_id=job_id,
         job_status=job.status,
         dry_run_status=job.dry_run_status,
+        result_type_filter=result_type,
         total=len(rows),
         items=[JobResultResponse.model_validate(row) for row in rows],
     )

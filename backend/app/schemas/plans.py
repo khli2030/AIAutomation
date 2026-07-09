@@ -90,6 +90,7 @@ class JobResultResponse(BaseModel):
 
     id: int
     job_id: int
+    result_type: str
     device_name: str
     status: str
     changed: bool
@@ -104,5 +105,6 @@ class JobResultsListResponse(BaseModel):
     job_id: int
     job_status: str
     dry_run_status: str | None = None
+    result_type_filter: str | None = None
     total: int
     items: list[JobResultResponse]
