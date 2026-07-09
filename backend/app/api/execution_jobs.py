@@ -1,15 +1,16 @@
-"""Execution job endpoints — Phase 5 approve/reject + Phase 6 mock dry-run/run/results."""
+"""Execution job endpoints — Phase 5 approve/reject + Phase 6 mock dry-run/run/results + Phase 7 list."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.constants.job_result_type import JobResultType
 from app.db.session import get_db
 from app.models.execution_job import ExecutionJob
 from app.models.job_result import JobResult
+from app.schemas.dashboard import ExecutionJobListAllResponse
 from app.schemas.plans import (
     ExecutionJobResponse,
     JobExecutionSummaryResponse,
@@ -50,6 +51,51 @@ def _job_response(db: Session, job: ExecutionJob) -> ExecutionJobResponse:
 def _summary_response(summary) -> JobExecutionSummaryResponse:
     data = summary_to_dict(summary)
     return JobExecutionSummaryResponse(**data)
+
+
+@router.get("", response_model=ExecutionJobListAllResponse)
+@router.get("/", response_model=ExecutionJobListAllResponse, include_in_schema=False)
+def list_execution_jobs(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    status_filter: str | None = Query(default=None, alias="status"),
+    plan_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> ExecutionJobListAllResponse:
+    """List execution jobs newest-first (Phase 7 approvals / jobs pages)."""
+    filters = []
+    if status_filter:
+        filters.append(ExecutionJob.status == status_filter)
+    if plan_id is not None:
+        filters.append(ExecutionJob.plan_id == plan_id)
+
+    count_q = select(func.count()).select_from(ExecutionJob)
+    query = select(ExecutionJob)
+    if filters:
+        count_q = count_q.where(*filters)
+        query = query.where(*filters)
+
+    total = db.scalar(count_q) or 0
+    jobs = db.scalars(
+        query.order_by(ExecutionJob.id.desc()).offset(offset).limit(limit)
+    ).all()
+    return ExecutionJobListAllResponse(
+        total=int(total),
+        limit=limit,
+        offset=offset,
+        items=[_job_response(db, job) for job in jobs],
+    )
+
+
+@router.get("/{job_id}", response_model=ExecutionJobResponse)
+def get_execution_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+) -> ExecutionJobResponse:
+    job = db.get(ExecutionJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution job not found")
+    return _job_response(db, job)
 
 
 @router.post("/{job_id}/dry-run", response_model=JobExecutionSummaryResponse)

@@ -11,6 +11,7 @@ from app.db.session import get_db
 from app.models.import_batch import ImportBatch
 from app.models.raw_import_record import RawImportRecord
 from app.schemas.ai_suggestions import AIAnalyzeSummaryResponse
+from app.schemas.dashboard import ImportBatchListResponse
 from app.schemas.imports import (
     ImportBatchResponse,
     ImportUploadResponse,
@@ -31,6 +32,29 @@ from app.services.validator import RecordValidationService
 from app.workers.tasks_import import parse_excel_batch
 
 router = APIRouter()
+
+
+@router.get("", response_model=ImportBatchListResponse)
+@router.get("/", response_model=ImportBatchListResponse, include_in_schema=False)
+def list_import_batches(
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+) -> ImportBatchListResponse:
+    """List import batches newest-first (Phase 7 dashboard / imports index)."""
+    total = db.scalar(select(func.count()).select_from(ImportBatch)) or 0
+    rows = db.scalars(
+        select(ImportBatch)
+        .order_by(ImportBatch.id.desc())
+        .offset(offset)
+        .limit(limit)
+    ).all()
+    return ImportBatchListResponse(
+        total=int(total),
+        limit=limit,
+        offset=offset,
+        items=[ImportBatchResponse.model_validate(row) for row in rows],
+    )
 
 
 @router.post(
@@ -89,21 +113,30 @@ def list_import_records(
     batch_id: int,
     limit: int = Query(default=50, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    validation_status: str | None = Query(default=None),
+    task_code: str | None = Query(default=None),
+    device_name: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> RawImportRecordListResponse:
     batch = db.get(ImportBatch, batch_id)
     if batch is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import batch not found")
 
+    filters = [RawImportRecord.batch_id == batch_id]
+    if validation_status:
+        filters.append(RawImportRecord.validation_status == validation_status)
+    if task_code:
+        filters.append(RawImportRecord.task_code == task_code)
+    if device_name:
+        filters.append(RawImportRecord.device_name.ilike(f"%{device_name.strip()}%"))
+
     total = db.scalar(
-        select(func.count()).select_from(RawImportRecord).where(
-            RawImportRecord.batch_id == batch_id
-        )
+        select(func.count()).select_from(RawImportRecord).where(*filters)
     ) or 0
 
     rows = db.scalars(
         select(RawImportRecord)
-        .where(RawImportRecord.batch_id == batch_id)
+        .where(*filters)
         .order_by(RawImportRecord.row_number.asc())
         .offset(offset)
         .limit(limit)
