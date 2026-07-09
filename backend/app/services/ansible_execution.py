@@ -1,7 +1,8 @@
 """Ansible execution facade.
 
 MOCK_MODE=true  → fake realistic per-host results; never runs ansible-runner/shell/SSH.
-MOCK_MODE=false → real Ansible Runner path (not implemented yet; see Phase 6).
+MOCK_MODE=false → real Ansible Runner path (Phase 8B), still gated by:
+  REAL_ANSIBLE_ENABLED=true, APP_ENV in {lab,test}, targets environment in {lab,test}.
 
 Hard guarantee when MOCK_MODE=true:
 - No import of ansible_runner / paramiko
@@ -140,7 +141,9 @@ class AnsibleExecutionService:
                 job=job, mode=mode, catalog=catalog, actor=actor, role=role
             )
 
-        return self._execute_real(job=job, mode=mode, actor=actor, role=role)
+        return self._execute_real(
+            job=job, mode=mode, actor=actor, role=role, catalog=catalog
+        )
 
     def _assert_job_status_allows(self, *, job: ExecutionJob, mode: ExecutionMode) -> None:
         if mode == "dry_run":
@@ -521,8 +524,9 @@ class AnsibleExecutionService:
         mode: ExecutionMode,
         actor: str = "system",
         role: str | None = None,
+        catalog: RemediationCatalog | None = None,
     ) -> JobExecutionSummary:
-        """Real Runner path. Hard-blocked while MOCK_MODE=true."""
+        """Real Runner path. Hard-blocked while MOCK_MODE=true; Phase 8B lab/test gates apply."""
         if self.settings.mock_mode:
             raise MockModeViolationError(
                 "Refusing real Ansible execution while MOCK_MODE=true. "
@@ -530,37 +534,70 @@ class AnsibleExecutionService:
             )
 
         # Lazy import ONLY when mock_mode is False — keeps mock path free of Runner code.
+        from app.services.ansible_safety import (  # noqa: PLC0415
+            RealAnsibleBlockedError as SafetyBlocked,
+            assert_settings_allow_real_ansible,
+        )
         from app.services.real_ansible_runner import (  # noqa: PLC0415
+            AnsibleRunnerMissingError,
+            RealAnsibleBlockedError,
             RealAnsibleNotImplementedError,
             run_with_ansible_runner,
         )
 
-        write_audit_log(
-            self.db,
-            actor=actor,
-            action="dry_run" if mode == "dry_run" else "execute",
-            entity_type="execution_job",
-            entity_id=job.id,
-            role=role,
-            details={
-                "event": "blocked",
-                "mock_mode": False,
-                "mode": mode,
-                "reason": "Real Ansible Runner is not implemented yet",
-            },
-            commit=False,
-        )
-        self.db.commit()
+        def _audit_blocked(reason: str, code: str = "blocked") -> None:
+            write_audit_log(
+                self.db,
+                actor=actor,
+                action="dry_run" if mode == "dry_run" else "execute",
+                entity_type="execution_job",
+                entity_id=job.id,
+                role=role,
+                details={
+                    "event": "blocked",
+                    "mock_mode": False,
+                    "real_ansible_enabled": bool(self.settings.real_ansible_enabled),
+                    "app_env": self.settings.app_env,
+                    "job_environment": getattr(job, "environment", None),
+                    "mode": mode,
+                    "reason": reason,
+                    "block_code": code,
+                    "used_ai_generated_playbook": False,
+                    "used_remediation_text": False,
+                },
+                commit=False,
+            )
+            self.db.commit()
+
+        # Settings gates first so blocked attempts are audited even without catalog.
         try:
-            run_with_ansible_runner(job=job, mode=mode)
-        except RealAnsibleNotImplementedError as exc:
-            raise AnsibleExecutionError(
-                "MOCK_MODE=false but real Ansible Runner is not implemented yet. "
-                "Keep MOCK_MODE=true for local/dev, or deploy to the internal "
-                "Ansible control server and complete Phase 6 before enabling real execution. "
-                "See DEPLOYMENT.md."
-            ) from exc
-        raise AnsibleExecutionError("Unreachable: real runner returned unexpectedly")
+            assert_settings_allow_real_ansible(self.settings)
+        except SafetyBlocked as exc:
+            _audit_blocked(exc.reason, getattr(exc, "code", "blocked"))
+            raise AnsibleExecutionError(exc.reason) from exc
+
+        catalog_entry = catalog or self._assert_catalog_allows(job.task_code)
+
+        try:
+            # Phase 8B: adapter validates gates/paths/runner availability and raises
+            # RealAnsibleBlockedError(code=phase8b_readiness_only) without calling
+            # ansible_runner.run(). Live apply is also blocked in the adapter.
+            run_with_ansible_runner(
+                job=job,
+                mode=mode,
+                catalog=catalog_entry,
+                settings=self.settings,
+            )
+        except (RealAnsibleBlockedError, AnsibleRunnerMissingError, RealAnsibleNotImplementedError) as exc:
+            reason = str(exc)
+            code = getattr(exc, "code", "blocked")
+            _audit_blocked(reason, code)
+            raise AnsibleExecutionError(reason) from exc
+
+        raise AnsibleExecutionError(
+            "Unreachable: Phase 8B real adapter must raise after readiness checks. "
+            "Keep MOCK_MODE=true for normal operator workflows."
+        )
 
 
 def summary_to_dict(summary: JobExecutionSummary) -> dict[str, Any]:

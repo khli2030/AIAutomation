@@ -155,13 +155,13 @@ def test_mock_mode_rejects_if_real_adapter_already_imported(
     sys.modules.pop("app.services.real_ansible_runner", None)
 
 
-def test_real_path_lazy_import_still_not_implemented() -> None:
+def test_real_path_lazy_import_blocked_when_disabled() -> None:
     db = MagicMock()
     service = AnsibleExecutionService(db, settings=_settings(mock_mode=False))
-    job = SimpleNamespace(id=1, task_code="SSH_DISABLE_ROOT_LOGIN")
+    job = SimpleNamespace(id=1, task_code="SSH_DISABLE_ROOT_LOGIN", environment="test")
     with pytest.raises(AnsibleExecutionError) as exc:
         service._execute_real(job=job, mode="dry_run")
-    assert "not implemented yet" in str(exc.value)
+    assert "REAL_ANSIBLE_ENABLED=false" in str(exc.value)
 
 
 def test_mock_host_outcome_is_pure_strings() -> None:

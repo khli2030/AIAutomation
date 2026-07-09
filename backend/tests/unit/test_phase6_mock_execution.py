@@ -486,7 +486,7 @@ def test_get_results_filters_by_result_type() -> None:
     assert out_run.items[0].result_type == "run"
 
 
-def test_mock_mode_false_returns_not_implemented() -> None:
+def test_mock_mode_false_blocked_without_real_flag() -> None:
     job = _job(status=JobStatus.WAITING_DRY_RUN.value, targets=[_target("h0")])
     catalog = _catalog()
     db = MagicMock()
@@ -495,7 +495,7 @@ def test_mock_mode_false_returns_not_implemented() -> None:
         ScalarsResult([catalog]),
     ]
     service = AnsibleExecutionService(db, settings=_settings(mock_mode=False))
-    with pytest.raises(AnsibleExecutionError, match="not implemented yet"):
+    with pytest.raises(AnsibleExecutionError, match="REAL_ANSIBLE_ENABLED=false"):
         service.dry_run_job(1)
 
 

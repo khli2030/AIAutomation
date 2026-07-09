@@ -49,16 +49,15 @@ def test_mock_host_outcome_patterns() -> None:
     assert "simulated failure" in failed.stdout
 
 
-def test_real_path_refuses_without_runner() -> None:
+def test_real_path_refuses_when_real_ansible_disabled() -> None:
     db = MagicMock()
     # write_audit_log will call db.add; commit is fine on MagicMock
     service = AnsibleExecutionService(db, settings=_settings(mock_mode=False))
-    job = SimpleNamespace(id=1, task_code="SSH_DISABLE_ROOT_LOGIN")
+    job = SimpleNamespace(id=1, task_code="SSH_DISABLE_ROOT_LOGIN", environment="test")
 
     with pytest.raises(AnsibleExecutionError) as exc:
         service._execute_real(job=job, mode="dry_run")
-    assert "not implemented yet" in str(exc.value)
-    assert "DEPLOYMENT.md" in str(exc.value)
+    assert "REAL_ANSIBLE_ENABLED=false" in str(exc.value)
 
 
 def test_mock_mode_true_cannot_enter_real_path() -> None:

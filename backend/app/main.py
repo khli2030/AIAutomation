@@ -93,9 +93,10 @@ def root(request: Request) -> dict[str, str]:
         "app": settings.app_name,
         "env": settings.app_env,
         "docs": "/docs",
-        "phase": "8a",
+        "phase": "8b",
         "auth": "MVP role tokens (VIEWER/OPERATOR/APPROVER/ADMIN) — not production SSO",
         "mock_mode": str(settings.mock_mode).lower(),
+        "real_ansible_enabled": str(settings.real_ansible_enabled).lower(),
         "role": auth.role.value if auth else "",
         "actor": auth.actor if auth else "",
     }

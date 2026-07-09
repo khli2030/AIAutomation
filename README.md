@@ -47,16 +47,16 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 8A available:** Minimal MVP RBAC with role tokens (`VIEWER_TOKEN` / `OPERATOR_TOKEN` / `APPROVER_TOKEN` / `ADMIN_TOKEN`). Keep `MOCK_MODE=true`. No real Ansible. See [`docs/12-phase8a-rbac.md`](docs/12-phase8a-rbac.md).
+**Phase 8B available:** Real Ansible *readiness* (lab/test gates + preflight). Defaults remain `MOCK_MODE=true` and `REAL_ANSIBLE_ENABLED=false`. Production real execution stays blocked. See [`docs/13-phase8b-real-ansible-readiness.md`](docs/13-phase8b-real-ansible-readiness.md).
 
-Also includes Phase 1–7.5 (API + Next.js operator UI + UI E2E mock).
+Also includes Phase 1–8A (API + Next.js operator UI + MVP RBAC).
 
 ## Quick start (internal Ansible host)
 
 ```bash
 cp .env.example .env
 # REQUIRED: set role tokens (at least ADMIN_TOKEN), SECRET_KEY, POSTGRES_PASSWORD
-# Keep MOCK_MODE=true
+# Keep MOCK_MODE=true and REAL_ANSIBLE_ENABLED=false
 
 docker compose up -d --build db redis backend celery-worker
 docker compose exec backend alembic upgrade head
@@ -110,6 +110,13 @@ curl -s http://127.0.0.1:8000/ \
   -H "X-Admin-Token: $ADMIN_TOKEN"
 ```
 
+Ansible preflight (read-only; does not execute):
+
+```bash
+curl -s http://127.0.0.1:8000/ansible/preflight \
+  -H "X-Admin-Token: $VIEWER_TOKEN"
+```
+
 Prefer SSH tunnel from another host:
 
 ```bash
@@ -131,5 +138,6 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 6.5. E2E mock workflow test + CLI
 7. Frontend pages
 7.5. UI E2E mock test (Playwright + manual)
-8A. Minimal MVP RBAC (role tokens) ← **current gate before real Ansible**
-8. Real Ansible integration (not started — keep MOCK_MODE=true)
+8A. Minimal MVP RBAC (role tokens)
+8B. Real Ansible readiness (lab/test gates + preflight) ← **current**
+8. Full real Ansible integration (keep MOCK_MODE=true / REAL_ANSIBLE_ENABLED=false by default)
