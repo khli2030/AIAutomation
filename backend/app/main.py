@@ -85,7 +85,7 @@ def root() -> dict[str, str]:
         "app": settings.app_name,
         "env": settings.app_env,
         "docs": "/docs",
-        "phase": "2",
+        "phase": "3",
         "auth": "ADMIN_TOKEN required for non-health endpoints",
         "mock_mode": str(settings.mock_mode).lower(),
     }
