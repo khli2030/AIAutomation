@@ -1,0 +1,2 @@
+# Common group vars placeholder. Do not store secrets here.
+# Use Ansible Vault or host credential stores on the control server.

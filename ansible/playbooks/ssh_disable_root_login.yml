@@ -1,0 +1,59 @@
+---
+# Initial safe playbook for SSH_DISABLE_ROOT_LOGIN (Phase 1 skeleton).
+# Execution wiring arrives in Phase 6 via Ansible Runner + remediation_catalog.
+#
+# Safety:
+# - backup sshd_config
+# - set PermitRootLogin no via lineinfile
+# - validate with sshd -t before reload
+# - serial batches of 20 hosts
+
+- name: Disable SSH root login
+  hosts: all
+  become: true
+  serial: 20
+  gather_facts: true
+
+  vars:
+    sshd_config_path: /etc/ssh/sshd_config
+
+  tasks:
+    - name: Ensure sshd_config exists
+      ansible.builtin.stat:
+        path: "{{ sshd_config_path }}"
+      register: sshd_config_stat
+
+    - name: Fail if sshd_config is missing
+      ansible.builtin.fail:
+        msg: "sshd_config not found at {{ sshd_config_path }}"
+      when: not sshd_config_stat.stat.exists
+
+    - name: Backup sshd_config before change
+      ansible.builtin.copy:
+        src: "{{ sshd_config_path }}"
+        dest: "{{ sshd_config_path }}.bak-{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        mode: "0600"
+      when: not ansible_check_mode
+
+    - name: Set PermitRootLogin no
+      ansible.builtin.lineinfile:
+        path: "{{ sshd_config_path }}"
+        regexp: '^#?\s*PermitRootLogin\b'
+        line: "PermitRootLogin no"
+        backup: true
+        validate: "/usr/sbin/sshd -t -f %s"
+
+    - name: Validate sshd configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -t
+      register: sshd_test
+      changed_when: false
+
+    - name: Reload sshd after successful validation
+      ansible.builtin.service:
+        name: sshd
+        state: reloaded
+      when:
+        - not ansible_check_mode
+        - sshd_test.rc == 0
