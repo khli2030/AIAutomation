@@ -219,8 +219,8 @@ def test_batch_status_columns_invalid(monkeypatch: pytest.MonkeyPatch, tmp_path:
     monkeypatch.setattr(ti, "write_audit_log", lambda *a, **k: None)
 
     result = ti.parse_excel_batch.run(7)
-    assert result["status"] == ImportBatchStatus.COLUMNS_INVALID.value
-    assert batch.status == ImportBatchStatus.COLUMNS_INVALID.value
+    assert result["status"] == ImportBatchStatus.FAILED.value
+    assert batch.status == "failed"
     assert "Missing required Excel columns" in (batch.error_message or "")
 
 

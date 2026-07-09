@@ -23,8 +23,13 @@ class ImportUploadError(ValueError):
 
 
 def _safe_filename(original: str) -> str:
+    """Basename-only sanitized name — never use raw client paths on disk."""
+    # Path(...).name strips directories / traversal segments (e.g. ../../etc/passwd.xlsx).
     name = Path(original).name.strip() or "upload.xlsx"
+    name = name.replace("\\", "_").replace("/", "_")
     name = _SAFE_NAME_RE.sub("_", name)
+    if name in {".", ".."} or not name:
+        name = "upload.xlsx"
     if not name.lower().endswith(".xlsx"):
         name = f"{name}.xlsx"
     return name[:200]
@@ -74,7 +79,10 @@ def save_upload_for_batch(
     batch_dir.mkdir(parents=True, exist_ok=True)
 
     safe = _safe_filename(file.filename or batch.original_filename)
-    stored_path = batch_dir / safe
+    stored_path = (batch_dir / safe).resolve()
+    # Defense-in-depth: refuse if resolved path escapes the batch directory.
+    if not stored_path.is_relative_to(batch_dir.resolve()):
+        raise ImportUploadError("Invalid upload path")
 
     with stored_path.open("wb") as out:
         shutil.copyfileobj(file.file, out, length=1024 * 1024)

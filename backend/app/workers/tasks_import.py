@@ -108,12 +108,12 @@ def parse_excel_batch(self, batch_id: int) -> dict[str, int | str | None]:
         _mark_batch_failed(
             db,
             batch_id=batch_id,
-            status=ImportBatchStatus.COLUMNS_INVALID.value,
+            status=ImportBatchStatus.FAILED.value,
             error_message=str(exc),
         )
         return {
             "batch_id": batch_id,
-            "status": ImportBatchStatus.COLUMNS_INVALID.value,
+            "status": ImportBatchStatus.FAILED.value,
             "total_records": total_records,
             "valid_records": valid_records,
             "invalid_records": invalid_records,
@@ -124,12 +124,12 @@ def parse_excel_batch(self, batch_id: int) -> dict[str, int | str | None]:
         _mark_batch_failed(
             db,
             batch_id=batch_id,
-            status=ImportBatchStatus.PARSE_FAILED.value,
+            status=ImportBatchStatus.FAILED.value,
             error_message=str(exc),
         )
         return {
             "batch_id": batch_id,
-            "status": ImportBatchStatus.PARSE_FAILED.value,
+            "status": ImportBatchStatus.FAILED.value,
             "total_records": total_records,
             "valid_records": valid_records,
             "invalid_records": invalid_records,

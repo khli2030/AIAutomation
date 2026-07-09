@@ -18,4 +18,6 @@
 
 ## Status values
 
-`uploaded` → `parsing` → `parsed` | `columns_invalid` | `parse_failed`
+`uploaded` → `parsing` → `parsed` | `failed`
+
+Any parse error (missing columns, I/O, unexpected exception) sets `import_batches.status = failed`.
