@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     # with MOCK_MODE=false (see DEPLOYMENT.md). Default True for safety.
     mock_mode: bool = True
 
+    # Phase 8B: second gate for real Ansible. Default false — even if MOCK_MODE=false,
+    # real execution stays blocked unless this is explicitly enabled for lab/test.
+    real_ansible_enabled: bool = False
+
     # AI Analyzer is interface-only until explicitly configured (mock by default).
     ai_provider: str = "mock"
     ai_enabled: bool = False

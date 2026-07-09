@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from app.api import (
     ai_suggestions,
+    ansible,
     dashboard,
     execution_jobs,
     execution_plans,
@@ -24,3 +25,5 @@ api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboar
 api_router.include_router(
     ai_suggestions.router, prefix="/ai-suggestions", tags=["ai-suggestions"]
 )
+api_router.include_router(ansible.router, prefix="/ansible", tags=["ansible"])
+
