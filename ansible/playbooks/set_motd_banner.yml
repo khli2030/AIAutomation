@@ -1,0 +1,12 @@
+---
+# Placeholder playbook — implement safely in a later phase.
+
+- name: Set MOTD banner
+  hosts: all
+  become: true
+  serial: 20
+  gather_facts: false
+  tasks:
+    - name: Placeholder — not implemented
+      ansible.builtin.debug:
+        msg: "Playbook stub for SET_MOTD_BANNER"

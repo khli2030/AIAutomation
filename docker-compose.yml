@@ -1,0 +1,96 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-compliance}
+      POSTGRES_USER: ${POSTGRES_USER:-compliance}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-compliance_change_me}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-compliance} -d ${POSTGRES_DB:-compliance}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://compliance:compliance_change_me@db:5432/compliance}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+    volumes:
+      - ./backend/app:/app/app
+      - ./data:/var/lib/compliance
+      # Backend does not execute Ansible; mount is optional for path validation only.
+      - ./ansible:/opt/ansible:ro
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://compliance:compliance_change_me@db:5432/compliance}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      ANSIBLE_HOME: /opt/ansible
+      ANSIBLE_PLAYBOOKS_DIR: /opt/ansible/playbooks
+      ANSIBLE_INVENTORIES_DIR: /opt/ansible/inventories
+      UPLOAD_DIR: /var/lib/compliance/uploads
+      RUNNER_PRIVATE_DATA_DIR: /var/lib/compliance/ansible_private_data
+      TMP_INVENTORY_DIR: /var/lib/compliance/tmp_inventories
+    volumes:
+      - ./backend/app:/app/app
+      - ./data:/var/lib/compliance
+      # Worker needs Ansible playbooks/inventories (same-server mode).
+      - ./ansible:/opt/ansible:ro
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # ansible-core is installed in the image for Ansible Runner (Phase 6).
+    command: >
+      celery -A app.workers.celery_app.celery_app worker --loglevel=INFO --concurrency=2
+
+  frontend:
+    profiles: ["frontend"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data:

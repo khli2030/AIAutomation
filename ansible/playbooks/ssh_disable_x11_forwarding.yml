@@ -1,0 +1,13 @@
+---
+# Placeholder playbook — implement safely in a later phase.
+# Must never be generated from Excel Remediation text.
+
+- name: Disable SSH X11 forwarding
+  hosts: all
+  become: true
+  serial: 20
+  gather_facts: false
+  tasks:
+    - name: Placeholder — not implemented
+      ansible.builtin.debug:
+        msg: "Playbook stub for SSH_DISABLE_X11_FORWARDING"
