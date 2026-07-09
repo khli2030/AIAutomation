@@ -5,7 +5,7 @@ Remediation text is stored for classification only — never executed.
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -13,9 +13,8 @@ from app.models.base import Base
 
 class RawImportRecord(Base):
     __tablename__ = "raw_import_records"
-    __table_args__ = (
-        UniqueConstraint("batch_id", "record_hash", name="uq_batch_record_hash"),
-    )
+    # Note: record_hash is indexed but not unique so duplicate findings are
+    # preserved and marked DUPLICATE during Phase 3 validation.
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     batch_id: Mapped[int] = mapped_column(

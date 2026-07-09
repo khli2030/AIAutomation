@@ -46,5 +46,5 @@ def root() -> dict[str, str]:
         "app": settings.app_name,
         "env": settings.app_env,
         "docs": "/docs",
-        "phase": "1",
+        "phase": "2",
     }

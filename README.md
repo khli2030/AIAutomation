@@ -24,7 +24,9 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 1 complete (this branch):** project structure, docker-compose, FastAPI skeleton, SQLAlchemy models, Alembic migration, Celery setup, Ansible folder + initial SSH playbook, AI provider interface (mock).
+**Phase 2 complete (this branch):** Excel upload endpoint, Celery chunked parse with openpyxl `read_only`, raw record persistence, column validation, audit logs for upload/parse.
+
+**Phase 1:** project structure, docker-compose, FastAPI skeleton, SQLAlchemy models, Alembic, Celery setup, Ansible folder + initial SSH playbook, AI provider interface (mock).
 
 ## Quick start (MVP)
 
@@ -38,6 +40,14 @@ docker compose exec backend python -m app.db.seed_cli
 API docs: http://localhost:8000/docs  
 Health: http://localhost:8000/health
 
+Upload example:
+
+```bash
+curl -X POST http://localhost:8000/imports/upload \
+  -F "file=@/path/to/compliance.xlsx" \
+  -F "uploaded_by=operator1"
+```
+
 Optional frontend placeholder:
 
 ```bash
@@ -46,12 +56,12 @@ docker compose --profile frontend up -d frontend
 
 ## Project layout
 
-See [`docs/01-project-structure.md`](docs/01-project-structure.md) and [`docs/02-phase1-files.md`](docs/02-phase1-files.md).
+See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-phase1-files.md`](docs/02-phase1-files.md), and [`docs/03-phase2-excel-import.md`](docs/03-phase2-excel-import.md).
 
 ## Phases
 
-1. Structure + compose + models + Celery ← **current**
-2. Excel upload + chunked parse
+1. Structure + compose + models + Celery
+2. Excel upload + chunked parse ← **current**
 3. Validation + classifier + asset match
 4. AI analyzer interface + suggestions
 5. Execution plans + approval + audit

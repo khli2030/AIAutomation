@@ -124,7 +124,8 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
         sa.ForeignKeyConstraint(["batch_id"], ["import_batches.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("batch_id", "record_hash", name="uq_batch_record_hash"),
+        # record_hash is indexed below; uniqueness is not enforced so duplicates
+        # can be stored and marked DUPLICATE in Phase 3.
     )
     op.create_index("ix_raw_import_records_batch_id", "raw_import_records", ["batch_id"])
     op.create_index("ix_raw_import_records_device_name", "raw_import_records", ["device_name"])
