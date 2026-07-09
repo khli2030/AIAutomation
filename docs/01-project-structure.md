@@ -1,7 +1,7 @@
 # Step 1 — Project Structure Proposal
 
-> Scope: structure only. No application code, Docker Compose, or schema yet.
 > Assumption: platform + Celery worker + Ansible Runner run on the **same internal Ansible control server**.
+> Deployment target: **internal Docker Compose only** — no AWS / public cloud.
 
 ## Design goals
 

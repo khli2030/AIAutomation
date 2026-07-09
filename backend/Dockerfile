@@ -1,4 +1,7 @@
-FROM python:3.12-slim
+# Base image must be available on the internal Ansible host (local cache)
+# or from INTERNAL_REGISTRY. Runtime does not call public cloud APIs.
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -6,20 +9,20 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-# System deps for psycopg and Ansible Runner (same-server worker image).
+# System deps for PostgreSQL client libs and Ansible SSH from the worker.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     libpq-dev \
     openssh-client \
     sshpass \
-    git \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
 
-# Install ansible-core for Celery worker Ansible Runner usage (Phase 6).
-# Kept in the shared image so backend and worker use one Dockerfile for MVP.
+# ansible-core + ansible-runner for Celery worker (same internal host as Ansible).
+# Host SSH keys are mounted at runtime — never copied into the image.
 RUN pip install "ansible-core>=2.16,<2.18" "ansible-runner>=2.3,<3"
 
 COPY . .

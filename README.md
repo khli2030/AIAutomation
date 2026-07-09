@@ -1,69 +1,80 @@
 # AIAutomation — Linux Compliance Remediation Platform
 
-Internal on-prem platform for managing Linux compliance remediation via an existing Ansible control server.
+**Internal / on-prem only.** No AWS, no Azure, no GCP, no public cloud runtime.
 
-**No AWS / no public cloud.** MVP runs platform + Celery + Ansible Runner on the same internal Ansible host.
+The platform runs with **Docker Compose on an internal Linux Ansible control server** that already has SSH access to target hosts. Celery workers use that host’s Ansible playbooks, inventories, and SSH keys.
 
 ## Stack
 
-| Layer | Technology |
-|-------|------------|
-| Backend | Python **FastAPI** |
-| Database | PostgreSQL |
-| Queue | Redis + Celery |
-| Automation | Ansible + Ansible Runner |
-| Frontend | Next.js (Phase 7; placeholder for now) |
-| Deploy | Docker Compose |
+| Layer | Technology | Where it runs |
+|-------|------------|---------------|
+| Backend | Python **FastAPI** | Docker Compose on Ansible host |
+| Database | PostgreSQL | Docker Compose (local volume) |
+| Queue | Redis + Celery | Docker Compose on same host |
+| Automation | Ansible + Ansible Runner | Same internal Ansible control server |
+| Frontend | Next.js (Phase 7 placeholder) | Optional Compose profile |
+| Deploy | **Docker Compose (internal)** | Not cloud PaaS |
 
 ## Safety principles
 
 - Excel `Remediation` text is **never** executed as a command.
 - Only approved playbooks from `ansible/playbooks/` mapped via `remediation_catalog` may run.
-- AI suggestions are draft-only and never auto-executed.
+- AI suggestions are mock/draft-only by default and never auto-executed.
 - Production requires dry-run success + human approval.
+- SSH private keys stay on the Ansible host (mounted read-only) — never in git or images.
 
-## Current status
-
-**Phase 2 complete (this branch):** Excel upload endpoint, Celery chunked parse with openpyxl `read_only`, raw record persistence, column validation, audit logs for upload/parse.
-
-**Phase 1:** project structure, docker-compose, FastAPI skeleton, SQLAlchemy models, Alembic, Celery setup, Ansible folder + initial SSH playbook, AI provider interface (mock).
-
-## Quick start (MVP)
+## Internal quick start (Ansible control server)
 
 ```bash
 cp .env.example .env
-docker compose up -d --build db redis backend celery-worker
-docker compose exec backend alembic upgrade head
-docker compose exec backend python -m app.db.seed_cli
+# edit POSTGRES_PASSWORD and SECRET_KEY
+
+mkdir -p data/ansible-ssh
+cp /path/to/ansible_control_key data/ansible-ssh/id_rsa
+chmod 600 data/ansible-ssh/id_rsa
+
+./scripts/internal_bootstrap.sh
+# or:
+# docker compose up -d --build db redis backend celery-worker
+# docker compose exec backend alembic upgrade head
+# docker compose exec backend python -m app.db.seed_cli
 ```
 
-API docs: http://localhost:8000/docs  
-Health: http://localhost:8000/health
+API (loopback on the Ansible host): http://127.0.0.1:8000/docs  
+Health: http://127.0.0.1:8000/health
+
+From another internal workstation, use an SSH tunnel:
+
+```bash
+ssh -L 8000:127.0.0.1:8000 user@ansible-control.internal
+```
 
 Upload example:
 
 ```bash
-curl -X POST http://localhost:8000/imports/upload \
+curl -X POST http://127.0.0.1:8000/imports/upload \
   -F "file=@/path/to/compliance.xlsx" \
   -F "uploaded_by=operator1"
 ```
 
-Optional frontend placeholder:
+Full internal setup guide: [`docs/04-internal-dev-environment.md`](docs/04-internal-dev-environment.md)
 
-```bash
-docker compose --profile frontend up -d frontend
-```
+## Current status
+
+- **Phase 1:** structure, Compose, models, Celery, Ansible layout
+- **Phase 2:** Excel upload + chunked parse
+- **Internal env hardening:** loopback binds, SSH key mounts, no cloud assumptions
 
 ## Project layout
 
-See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-phase1-files.md`](docs/02-phase1-files.md), and [`docs/03-phase2-excel-import.md`](docs/03-phase2-excel-import.md).
+See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-phase1-files.md`](docs/02-phase1-files.md), [`docs/03-phase2-excel-import.md`](docs/03-phase2-excel-import.md), [`docs/04-internal-dev-environment.md`](docs/04-internal-dev-environment.md).
 
 ## Phases
 
 1. Structure + compose + models + Celery
-2. Excel upload + chunked parse ← **current**
+2. Excel upload + chunked parse
 3. Validation + classifier + asset match
-4. AI analyzer interface + suggestions
+4. AI analyzer interface + suggestions (mock / optional on-prem LLM only)
 5. Execution plans + approval + audit
 6. Ansible Runner dry-run / run
 7. Frontend pages

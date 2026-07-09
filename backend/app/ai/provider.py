@@ -123,5 +123,6 @@ def get_ai_provider() -> AIProvider:
     settings = get_settings()
     if not settings.ai_enabled or settings.ai_provider == "mock":
         return MockAIProvider()
-    # Future: wire OpenAI/Azure/local LLM here when explicitly configured.
+    # Future: optional on-prem / internal LLM endpoint only (never required).
+    # Do not wire public SaaS AI cloud APIs into this platform.
     return MockAIProvider()

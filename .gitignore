@@ -25,6 +25,16 @@ data/ansible_private_data/*
 data/tmp_inventories/*
 !data/tmp_inventories/.gitkeep
 
+# Ansible SSH keys on the control server — never commit
+data/ansible-ssh/*
+!data/ansible-ssh/.gitkeep
+!data/ansible-ssh/README.md
+*.pem
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+
 # IDE / OS
 .idea/
 .vscode/

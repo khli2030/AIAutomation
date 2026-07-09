@@ -42,10 +42,11 @@ class Settings(BaseSettings):
     excel_chunk_size: int = 500
     job_batch_size: int = 75
 
-    # AI Analyzer is interface-only until explicitly configured.
+    # AI Analyzer is mock/local by default. No public cloud AI dependency.
     ai_provider: str = "mock"
     ai_enabled: bool = False
     ai_api_key: str | None = None
+    # Optional internal LLM base URL later (e.g. http://127.0.0.1:11434) — never required.
     ai_base_url: str | None = None
     ai_model: str | None = None
 
