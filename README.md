@@ -47,9 +47,9 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 2 (this branch):** Excel `.xlsx` upload, Celery chunked parse (1000), raw record persistence, batch counters. Classification and plans are not included yet.
+**Phase 3 available:** `POST /imports/{batch_id}/validate` — rule-based classification + validation statuses on stored records (no AI, no plans, no Ansible).
 
-Also includes Phase 1 hardening + `MOCK_MODE` (default true — no real Ansible).
+Also includes Phase 1 hardening, Phase 2 Excel upload/parse, and `MOCK_MODE` (default true — no real Ansible).
 
 ## Quick start (internal Ansible host)
 
@@ -98,8 +98,8 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 ## Phases
 
 1. Structure + compose + models + Celery
-2. Excel upload + chunked parse ← **current**
-3. Validation + classifier + asset match
+2. Excel upload + chunked parse
+3. Validation + classifier + asset match ← **current**
 4. AI analyzer interface + suggestions
 5. Execution plans + approval + audit
 6. Ansible Runner dry-run / run (real path when `MOCK_MODE=false`)

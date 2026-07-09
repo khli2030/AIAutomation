@@ -55,3 +55,15 @@ class RawImportRecordListResponse(BaseModel):
     limit: int
     offset: int
     items: list[RawImportRecordResponse]
+
+
+class ValidationSummaryResponse(BaseModel):
+    batch_id: int
+    total_records: int
+    ready_for_plan: int
+    needs_review: int
+    asset_not_found: int
+    already_compliant: int
+    duplicate: int
+    invalid_record: int
+    unsupported_control: int

@@ -15,6 +15,7 @@ from app.schemas.imports import (
     ImportUploadResponse,
     RawImportRecordListResponse,
     RawImportRecordResponse,
+    ValidationSummaryResponse,
 )
 from app.services.import_service import (
     ImportUploadError,
@@ -22,6 +23,7 @@ from app.services.import_service import (
     finalize_upload_audit,
     save_upload_for_batch,
 )
+from app.services.validator import RecordValidationService
 from app.workers.tasks_import import parse_excel_batch
 
 router = APIRouter()
@@ -110,6 +112,31 @@ def list_import_records(
         offset=offset,
         items=[RawImportRecordResponse.model_validate(row) for row in rows],
     )
+
+
+@router.post(
+    "/{batch_id}/validate",
+    response_model=ValidationSummaryResponse,
+    status_code=status.HTTP_200_OK,
+)
+def validate_import_batch(
+    batch_id: int,
+    db: Session = Depends(get_db),
+) -> ValidationSummaryResponse:
+    """Validate + rule-based classify raw_import_records for a batch (Phase 3).
+
+    Does not generate execution plans, call AI, or invoke Ansible/MOCK execution.
+    """
+    batch = db.get(ImportBatch, batch_id)
+    if batch is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Import batch not found")
+
+    try:
+        summary = RecordValidationService(db).validate_batch(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return ValidationSummaryResponse(**summary.to_dict())
 
 
 @router.post("/{batch_id}/generate-plan", status_code=status.HTTP_501_NOT_IMPLEMENTED)
