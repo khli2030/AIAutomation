@@ -444,7 +444,11 @@ def test_real_dry_run_readiness_does_not_call_runner(
     )
     from app.services.real_ansible_runner import run_with_ansible_runner
 
-    job = SimpleNamespace(id=9, environment="test", targets=[])
+    job = SimpleNamespace(
+        id=9,
+        environment="test",
+        targets=[SimpleNamespace(device_name="host-a")],
+    )
     catalog = SimpleNamespace(
         task_code="T",
         is_enabled=True,
@@ -464,7 +468,12 @@ def test_real_dry_run_readiness_does_not_call_runner(
     class _FakeRunner:
         status = "successful"
         rc = 0
-        events: list = []
+        events = [
+            {
+                "event": "runner_on_ok",
+                "event_data": {"host": "host-a", "res": {"changed": False, "rc": 0}},
+            }
+        ]
 
     calls: list[dict] = []
 
@@ -481,13 +490,13 @@ def test_real_dry_run_readiness_does_not_call_runner(
     fake.run = _FakeAR.run  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ansible_runner", fake)
 
-    # No expected hosts → empty events OK.
     out = run_with_ansible_runner(
         job=job, mode="dry_run", catalog=catalog, settings=settings
     )
     assert out["check_mode"] is True
     assert out["cmdline"] == "--check"
     assert calls and "--check" in calls[0].get("cmdline", "")
+    assert calls[0].get("limit") == "host-a"
     assert out["used_ai_generated_playbook"] is False
     assert out["used_remediation_text"] is False
 

@@ -188,8 +188,9 @@ def test_production_staging_targets_block_real_dry_run(
         for c in db.add.call_args_list
         if isinstance(c.args[0], AuditLog)
     ]
-    assert "real_dry_run_started" in events
+    # Target gates run before started audit — blocked only, no started.
     assert "real_dry_run_blocked" in events
+    assert "real_dry_run_started" not in events
 
 
 def test_lab_dry_run_calls_ansible_runner_check_mode(
@@ -218,6 +219,7 @@ def test_lab_dry_run_calls_ansible_runner_check_mode(
     )
     assert calls, "ansible_runner.run must be called"
     assert calls[0]["cmdline"] == "--check"
+    assert calls[0]["limit"] == "host-a"
     assert out["check_mode"] is True
     assert out["used_ai_generated_playbook"] is False
     assert out["used_remediation_text"] is False
@@ -225,10 +227,100 @@ def test_lab_dry_run_calls_ansible_runner_check_mode(
     assert out["hosts"][0]["status"] == "success"
 
 
+def test_empty_targets_block_unbounded_inventory_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _p, _i, settings = _lab_dirs(tmp_path)
+    calls = _install_fake_runner(monkeypatch)
+    job = SimpleNamespace(id=99, environment="lab", targets=[])
+    catalog = SimpleNamespace(task_code="T", is_enabled=True, ansible_playbook_path="ok.yml")
+    with pytest.raises(RealAnsibleBlockedError, match="no targets"):
+        run_with_ansible_runner(
+            job=job, mode="dry_run", catalog=catalog, settings=settings
+        )
+    assert calls == []
+
+
+def test_partial_host_parse_fails_safely(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _p, _i, settings = _lab_dirs(tmp_path)
+    events = [
+        {
+            "event": "runner_on_ok",
+            "event_data": {"host": "host-a", "res": {"changed": False, "rc": 0}},
+        }
+    ]
+    _install_fake_runner(monkeypatch, events=events)
+    job = SimpleNamespace(
+        id=100,
+        environment="lab",
+        targets=[
+            SimpleNamespace(device_name="host-a"),
+            SimpleNamespace(device_name="host-b"),
+        ],
+    )
+    catalog = SimpleNamespace(task_code="T", is_enabled=True, ansible_playbook_path="ok.yml")
+    with pytest.raises(RealAnsibleBlockedError, match="host-b"):
+        run_with_ansible_runner(
+            job=job, mode="dry_run", catalog=catalog, settings=settings
+        )
+
+
+def test_runner_level_failure_marks_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _p, _i, settings = _lab_dirs(tmp_path)
+    events = [
+        {
+            "event": "runner_on_ok",
+            "event_data": {"host": "host-a", "res": {"changed": False, "rc": 0}},
+        }
+    ]
+    _install_fake_runner(monkeypatch, events=events, status="failed", rc=2)
+    target = SimpleNamespace(
+        device_name="host-a",
+        ip_address="10.0.0.1",
+        ansible_group="linux_test",
+        status="pending",
+        environment=None,
+    )
+    job = SimpleNamespace(
+        id=101,
+        task_code="T",
+        environment="lab",
+        ansible_group="linux_test",
+        status="waiting_dry_run",
+        dry_run_status=None,
+        started_at=None,
+        finished_at=None,
+        targets=[target],
+    )
+    catalog = SimpleNamespace(task_code="T", is_enabled=True, ansible_playbook_path="ok.yml")
+    db = MagicMock()
+    service = AnsibleExecutionService(db, settings=settings)
+    with pytest.raises(AnsibleExecutionError, match="ansible-runner reported"):
+        service._execute_real(
+            job=job, mode="dry_run", catalog=catalog, actor="role:operator", role="operator"
+        )
+    assert job.status == "dry_run_failed"
+    events_audit = [
+        json.loads(c.args[0].details)["event"]
+        for c in db.add.call_args_list
+        if isinstance(c.args[0], AuditLog)
+    ]
+    assert "real_dry_run_started" in events_audit
+    assert "real_dry_run_failed" in events_audit
+
+
 def test_apply_still_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _p, _i, settings = _lab_dirs(tmp_path)
     calls = _install_fake_runner(monkeypatch)
-    job = SimpleNamespace(id=11, environment="lab", targets=[])
+    job = SimpleNamespace(
+        id=11,
+        environment="lab",
+        targets=[SimpleNamespace(device_name="host-a")],
+    )
     catalog = SimpleNamespace(task_code="T", is_enabled=True, ansible_playbook_path="ok.yml")
     with pytest.raises(RealAnsibleBlockedError, match="blocks real apply"):
         run_with_ansible_runner(
@@ -262,11 +354,21 @@ def test_no_subprocess_shell_or_playbook_fallback() -> None:
 
 def test_ai_and_remediation_never_used(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _p, _i, settings = _lab_dirs(tmp_path)
-    _install_fake_runner(monkeypatch, events=[])
+    events = [
+        {
+            "event": "runner_on_ok",
+            "event_data": {"host": "host-a", "res": {"changed": False, "rc": 0}},
+        }
+    ]
+    _install_fake_runner(monkeypatch, events=events)
     src = Path(__import__("app.services.real_ansible_runner", fromlist=["x"]).__file__).read_text()
     assert "generated_playbook" in src
     assert "remediation text" in src.lower() or "Remediation text" in src
-    job = SimpleNamespace(id=12, environment="test", targets=[])
+    job = SimpleNamespace(
+        id=12,
+        environment="test",
+        targets=[SimpleNamespace(device_name="host-a")],
+    )
     catalog = SimpleNamespace(task_code="T", is_enabled=True, ansible_playbook_path="ok.yml")
     out = run_with_ansible_runner(
         job=job, mode="dry_run", catalog=catalog, settings=settings
@@ -365,7 +467,11 @@ def test_incomplete_host_parse_fails_safely(
 def test_disabled_catalog_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _p, _i, settings = _lab_dirs(tmp_path)
     _install_fake_runner(monkeypatch)
-    job = SimpleNamespace(id=22, environment="lab", targets=[])
+    job = SimpleNamespace(
+        id=22,
+        environment="lab",
+        targets=[SimpleNamespace(device_name="host-a")],
+    )
     catalog = SimpleNamespace(task_code="T", is_enabled=False, ansible_playbook_path="ok.yml")
     with pytest.raises(RealAnsibleBlockedError, match="disabled"):
         run_with_ansible_runner(

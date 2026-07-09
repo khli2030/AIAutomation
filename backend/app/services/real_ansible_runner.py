@@ -190,14 +190,19 @@ def _parse_host_events(
             )
 
     outcomes = list(by_host.values())
-    if expected_hosts and not outcomes:
-        raise RealAnsibleBlockedError(
-            "Per-host event parsing incomplete: ansible-runner returned no usable "
-            "host events for expected targets. Failing safely without inventing "
-            "success. Limitation: Phase 8C requires runner host events "
-            "(runner_on_ok/failed/skipped/unreachable).",
-            code="host_parse_incomplete",
-        )
+    if expected_hosts:
+        expected = {h.strip() for h in expected_hosts if h and str(h).strip()}
+        seen = {h.device_name for h in outcomes}
+        missing = sorted(expected - seen)
+        if missing:
+            raise RealAnsibleBlockedError(
+                "Per-host event parsing incomplete: ansible-runner returned no "
+                f"usable host events for expected targets {missing}. "
+                "Failing safely without inventing success. Limitation: Phase 8C "
+                "requires runner host events for every --limit host "
+                "(runner_on_ok/failed/skipped/unreachable).",
+                code="host_parse_incomplete",
+            )
     return outcomes
 
 
@@ -263,6 +268,13 @@ def run_with_ansible_runner(
         for t in list(getattr(job, "targets", None) or [])
         if getattr(t, "device_name", None)
     ]
+    # Never run check-mode against the full inventory without an explicit limit.
+    if not limit_hosts:
+        raise RealAnsibleBlockedError(
+            "Real dry-run blocked: job has no targets. Refusing unbounded "
+            "inventory check-mode run.",
+            code="missing_targets",
+        )
 
     private_data_dir = Path(cfg.runner_private_data_dir) / f"job-{job.id}-dry-run"
     private_data_dir.mkdir(parents=True, exist_ok=True)
@@ -282,8 +294,7 @@ def run_with_ansible_runner(
             ),
         },
     }
-    if limit_hosts:
-        run_kwargs["limit"] = ",".join(limit_hosts)
+    run_kwargs["limit"] = ",".join(limit_hosts)
 
     logger.info(
         "Phase 8C real dry-run: job_id=%s playbook=%s inventory=%s limit=%s "

@@ -585,12 +585,33 @@ class AnsibleExecutionService:
             _audit_blocked(reason, "apply_blocked_phase8c")
             raise AnsibleExecutionError(reason)
 
-        # Settings gates first so blocked attempts are audited even without catalog.
+        # Settings + target gates BEFORE started audit / running status.
         try:
             assert_settings_allow_real_ansible(self.settings)
         except SafetyBlocked as exc:
             _audit_blocked(exc.reason, getattr(exc, "code", "blocked"))
             raise AnsibleExecutionError(exc.reason) from exc
+
+        from app.services.ansible_safety import (  # noqa: PLC0415
+            assert_job_targets_allow_real_ansible,
+        )
+
+        try:
+            assert_job_targets_allow_real_ansible(
+                job_environment=getattr(job, "environment", None),
+                target_environments=[getattr(job, "environment", None)],
+            )
+        except SafetyBlocked as exc:
+            _audit_blocked(exc.reason, getattr(exc, "code", "blocked"))
+            raise AnsibleExecutionError(exc.reason) from exc
+
+        if not list(getattr(job, "targets", None) or []):
+            reason = (
+                "Real dry-run blocked: job has no targets. Refusing unbounded "
+                "inventory check-mode run."
+            )
+            _audit_blocked(reason, "missing_targets")
+            raise AnsibleExecutionError(reason)
 
         catalog_entry = catalog or self._assert_catalog_allows(job.task_code)
         playbook_path = (catalog_entry.ansible_playbook_path or "").strip()
@@ -655,6 +676,7 @@ class AnsibleExecutionService:
                 "production_target",
                 "target_env_blocked",
                 "missing_environment",
+                "missing_targets",
                 "catalog_required",
                 "catalog_disabled",
                 "path_traversal",
@@ -723,6 +745,39 @@ class AnsibleExecutionService:
             )
             self.db.commit()
             raise AnsibleExecutionError(reason) from exc
+
+        # Honor runner-level failure even if host events look clean.
+        if not result.get("ok", False):
+            reason = (
+                "Real dry-run failed: ansible-runner reported "
+                f"status={result.get('status')!r} rc={result.get('rc')!r}."
+            )
+            job.status = JobStatus.DRY_RUN_FAILED.value
+            job.dry_run_status = JobStatus.DRY_RUN_FAILED.value
+            job.finished_at = datetime.now(UTC)
+            write_audit_log(
+                self.db,
+                actor=actor,
+                action="dry_run",
+                entity_type="execution_job",
+                entity_id=job.id,
+                role=role,
+                details={
+                    "event": "real_dry_run_failed",
+                    "mock_mode": False,
+                    "mode": "dry_run",
+                    "reason": reason,
+                    "block_code": "runner_status_failed",
+                    "runner_status": result.get("status"),
+                    "runner_rc": result.get("rc"),
+                    "used_ai_generated_playbook": False,
+                    "used_remediation_text": False,
+                    "execution_backend": "ansible-runner",
+                },
+                commit=False,
+            )
+            self.db.commit()
+            raise AnsibleExecutionError(reason)
 
         # Map runner host outcomes onto job targets; persist result_type=dry_run.
         targets_by_name = {
