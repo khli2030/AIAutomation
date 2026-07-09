@@ -15,6 +15,10 @@ class JobResult(Base):
     job_id: Mapped[int] = mapped_column(
         ForeignKey("execution_jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
+    # dry_run | run — keeps mock dry-run and apply results distinguishable.
+    result_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="dry_run", index=True
+    )
     device_name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
     # success | failed | unreachable | skipped | changed (normalized later)
     status: Mapped[str] = mapped_column(String(64), nullable=False)

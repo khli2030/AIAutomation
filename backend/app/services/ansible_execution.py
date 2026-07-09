@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.config import Settings, get_settings
+from app.constants.job_result_type import JobResultType
 from app.constants.job_status import JobStatus
 from app.models.execution_job import ExecutionJob
 from app.models.execution_job_target import ExecutionJobTarget
@@ -32,6 +33,11 @@ from app.services.audit import write_audit_log
 logger = logging.getLogger(__name__)
 
 ExecutionMode = Literal["dry_run", "apply"]
+
+
+def _result_type_for_mode(mode: ExecutionMode) -> str:
+    """Map execution mode to persisted job_results.result_type."""
+    return JobResultType.DRY_RUN.value if mode == "dry_run" else JobResultType.RUN.value
 
 # Modules that must never be loaded/used while MOCK_MODE=true.
 _FORBIDDEN_MODULES_WHEN_MOCK: frozenset[str] = frozenset(
@@ -86,23 +92,50 @@ class AnsibleExecutionService:
         self.settings = settings or get_settings()
 
     def dry_run_job(self, job_id: int) -> JobExecutionSummary:
-        """Run check-mode (or mock equivalent) for an execution job."""
+        """Run check-mode (or mock equivalent) for an execution job.
+
+        Allowed only when job status is waiting_dry_run.
+        """
         return self._execute(job_id=job_id, mode="dry_run")
 
     def run_job(self, job_id: int) -> JobExecutionSummary:
-        """Run apply-mode (or mock equivalent) for an approved execution job."""
+        """Run apply-mode (or mock equivalent) for an approved execution job.
+
+        Allowed only when job status is approved.
+        """
         return self._execute(job_id=job_id, mode="apply")
 
     def _execute(self, *, job_id: int, mode: ExecutionMode) -> JobExecutionSummary:
         job = self._load_job(job_id)
-        self._assert_catalog_allows(job.task_code)
+        self._assert_job_status_allows(job=job, mode=mode)
+        catalog = self._assert_catalog_allows(job.task_code)
 
         # Branch FIRST on MOCK_MODE so the real adapter is never imported/called.
         if self.settings.mock_mode:
             self._assert_mock_mode_safe()
-            return self._execute_mock(job=job, mode=mode)
+            return self._execute_mock(job=job, mode=mode, catalog=catalog)
 
         return self._execute_real(job=job, mode=mode)
+
+    def _assert_job_status_allows(self, *, job: ExecutionJob, mode: ExecutionMode) -> None:
+        if mode == "dry_run":
+            # First dry-run: waiting_dry_run. Retry after failure: dry_run_failed
+            # (replaces previous dry_run result_type rows only).
+            allowed = {
+                JobStatus.WAITING_DRY_RUN.value,
+                JobStatus.DRY_RUN_FAILED.value,
+            }
+            if job.status not in allowed:
+                raise AnsibleExecutionError(
+                    "Dry-run allowed only when job status is waiting_dry_run "
+                    f"or dry_run_failed (current status={job.status})"
+                )
+            return
+        if job.status != JobStatus.APPROVED.value:
+            raise AnsibleExecutionError(
+                "Run allowed only when job status=approved "
+                f"(current status={job.status})"
+            )
 
     def _assert_mock_mode_safe(self) -> None:
         """Defense-in-depth: refuse if MOCK_MODE is inconsistent or forbidden libs loaded."""
@@ -134,7 +167,7 @@ class AnsibleExecutionService:
             raise AnsibleExecutionError(f"Execution job {job_id} not found")
         return job
 
-    def _assert_catalog_allows(self, task_code: str) -> None:
+    def _assert_catalog_allows(self, task_code: str) -> RemediationCatalog:
         catalog = self.db.scalars(
             select(RemediationCatalog).where(RemediationCatalog.task_code == task_code)
         ).first()
@@ -146,13 +179,24 @@ class AnsibleExecutionService:
             raise AnsibleExecutionError(
                 f"task_code {task_code} is disabled in remediation_catalog"
             )
+        # Never use AI generated_playbook — only catalog playbook paths.
+        playbook_path = (catalog.ansible_playbook_path or "").strip()
+        if not playbook_path:
+            raise AnsibleExecutionError(
+                f"task_code {task_code} has empty ansible_playbook_path in catalog"
+            )
+        return catalog
 
     # ------------------------------------------------------------------
     # MOCK path — no ansible-runner, no shell, no SSH
     # ------------------------------------------------------------------
 
     def _execute_mock(
-        self, *, job: ExecutionJob, mode: ExecutionMode
+        self,
+        *,
+        job: ExecutionJob,
+        mode: ExecutionMode,
+        catalog: RemediationCatalog,
     ) -> JobExecutionSummary:
         # Re-check at entry so this method is never a backdoor into real execution.
         if not self.settings.mock_mode:
@@ -160,6 +204,8 @@ class AnsibleExecutionService:
                 "Refusing _execute_mock while MOCK_MODE=false"
             )
         self._assert_mock_mode_safe()
+
+        playbook_path = (catalog.ansible_playbook_path or "").strip()
 
         now = datetime.now(UTC)
         running_status = (
@@ -176,21 +222,29 @@ class AnsibleExecutionService:
         write_audit_log(
             self.db,
             actor="system",
-            action="dry_run" if mode == "dry_run" else "execute",
+            action="dry_run" if mode == "dry_run" else "run",
             entity_type="execution_job",
             entity_id=job.id,
             details={
                 "event": "started",
                 "mock_mode": True,
                 "mode": mode,
+                "result_type": _result_type_for_mode(mode),
                 "task_code": job.task_code,
+                "ansible_playbook_path": playbook_path,
+                "used_ai_generated_playbook": False,
                 "execution_backend": "mock",
             },
         )
 
-        # Clear previous results for this mode re-run (simple MVP behaviour).
+        # Replace previous results for THIS mode only — never wipe the other type.
+        # Dry-run re-run (if status allows) replaces dry_run rows; run never deletes dry_run.
+        result_type = _result_type_for_mode(mode)
         existing = self.db.scalars(
-            select(JobResult).where(JobResult.job_id == job.id)
+            select(JobResult).where(
+                JobResult.job_id == job.id,
+                JobResult.result_type == result_type,
+            )
         ).all()
         for row in existing:
             self.db.delete(row)
@@ -214,12 +268,14 @@ class AnsibleExecutionService:
                 target=target,
                 mode=mode,
                 index=index,
+                playbook_path=playbook_path,
             )
             outcomes.append((target, outcome))
             target.status = outcome.status
             self.db.add(
                 JobResult(
                     job_id=job.id,
+                    result_type=result_type,
                     device_name=target.device_name,
                     status=outcome.status,
                     changed=outcome.changed,
@@ -255,6 +311,7 @@ class AnsibleExecutionService:
         target: ExecutionJobTarget,
         mode: ExecutionMode,
         index: int,
+        playbook_path: str = "",
     ) -> HostMockOutcome:
         """Generate fake but realistic Ansible-like output per host.
 
@@ -263,11 +320,13 @@ class AnsibleExecutionService:
         - every 7th host → failed
         - every 5th host (not failed) → skipped / already compliant
         - otherwise success (dry-run: ok preview; apply: changed)
+
+        playbook_path must come from enabled remediation_catalog — never AI drafts.
         """
         host = target.device_name
         ip = target.ip_address or "0.0.0.0"
         task = job.task_code
-        playbook = f"{task.lower()}.yml"
+        playbook = playbook_path or f"{task.lower()}.yml"
 
         if index % 7 == 6:
             return HostMockOutcome(
@@ -309,7 +368,7 @@ class AnsibleExecutionService:
                 skipped=False,
                 stdout=(
                     f"PLAY [MOCK dry_run / check mode] *******************************************\n"
-                    f"TASK [Apply {task}] *******************************************************\n"
+                    f"TASK [Apply {task} via {playbook}] *****************************************\n"
                     f"ok: [{host}] => {{"
                     f"\"changed\": false, "
                     f"\"msg\": \"MOCK check mode: would change {task} on {host} ({ip})\", "
@@ -328,7 +387,7 @@ class AnsibleExecutionService:
             skipped=False,
             stdout=(
                 f"PLAY [MOCK apply] **********************************************************\n"
-                f"TASK [Apply {task}] *******************************************************\n"
+                f"TASK [Apply {task} via {playbook}] *****************************************\n"
                 f"changed: [{host}] => {{"
                 f"\"changed\": true, "
                 f"\"msg\": \"MOCK applied {task} on {host} ({ip})\""
@@ -377,20 +436,21 @@ class AnsibleExecutionService:
         job.status = final_status
         job.finished_at = now
         if mode == "dry_run":
+            # Keep job.status = dry_run_success so approve gate (Phase 5/6) can proceed.
+            # Do NOT auto-advance to waiting_approval — human approve is required.
             job.dry_run_status = final_status
-            if final_status == JobStatus.DRY_RUN_SUCCESS.value:
-                job.status = JobStatus.WAITING_APPROVAL.value
 
         write_audit_log(
             self.db,
             actor="system",
-            action="dry_run" if mode == "dry_run" else "execute",
+            action="dry_run" if mode == "dry_run" else "run",
             entity_type="execution_job",
             entity_id=job.id,
             details={
                 "event": "completed",
                 "mock_mode": mock_mode,
                 "mode": mode,
+                "result_type": _result_type_for_mode(mode),
                 "execution_backend": "mock" if mock_mode else "real",
                 "job_status": job.status,
                 "dry_run_status": job.dry_run_status,

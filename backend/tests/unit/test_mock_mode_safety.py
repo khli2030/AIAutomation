@@ -109,25 +109,27 @@ def test_mock_mode_does_not_import_real_adapter(monkeypatch: pytest.MonkeyPatch)
     job = SimpleNamespace(
         id=1,
         task_code="SSH_DISABLE_ROOT_LOGIN",
-        status="draft",
+        status="waiting_dry_run",
         dry_run_status=None,
         started_at=None,
         finished_at=None,
         targets=[],
     )
+    catalog = SimpleNamespace(
+        task_code="SSH_DISABLE_ROOT_LOGIN",
+        is_enabled=True,
+        ansible_playbook_path="ssh_disable_root_login.yml",
+    )
     service = AnsibleExecutionService(db, settings=_settings(mock_mode=True))
     monkeypatch.setattr(service, "_load_job", lambda _id: job)
-    monkeypatch.setattr(service, "_assert_catalog_allows", lambda _code: None)
+    monkeypatch.setattr(service, "_assert_catalog_allows", lambda _code: catalog)
 
     summary = service.dry_run_job(1)
     assert summary.mock_mode is True
+    assert summary.job_status == "dry_run_success"
     assert "app.services.real_ansible_runner" not in sys.modules
-    for name in ("ansible_runner", "paramiko", "subprocess"):
-        # subprocess may already be imported by pytest/other libs; that is OK
-        # as long as our service did not call it. ansible_runner/paramiko must
-        # not appear from our code path.
-        if name in {"ansible_runner", "paramiko"}:
-            assert name not in sys.modules
+    for name in ("ansible_runner", "paramiko"):
+        assert name not in sys.modules
 
 
 def test_execute_real_blocked_when_mock_mode_true() -> None:

@@ -69,3 +69,42 @@ class ExecutionJobTargetResponse(BaseModel):
 
 class JobReviewRequest(BaseModel):
     reviewed_by: str | None = Field(default=None, max_length=255)
+
+
+class JobExecutionSummaryResponse(BaseModel):
+    job_id: int
+    mode: str
+    mock_mode: bool
+    status: str
+    dry_run_status: str | None = None
+    hosts_total: int
+    hosts_success: int
+    hosts_failed: int
+    hosts_changed: int
+    hosts_skipped: int
+    message: str = "Mock execution only — no ansible-runner, subprocess, or SSH."
+
+
+class JobResultResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    job_id: int
+    result_type: str
+    device_name: str
+    status: str
+    changed: bool
+    skipped: bool
+    stdout: str | None = None
+    stderr: str | None = None
+    return_code: int | None = None
+    created_at: datetime
+
+
+class JobResultsListResponse(BaseModel):
+    job_id: int
+    job_status: str
+    dry_run_status: str | None = None
+    result_type_filter: str | None = None
+    total: int
+    items: list[JobResultResponse]
