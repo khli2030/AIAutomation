@@ -47,9 +47,9 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 7 available:** Next.js operator UI (dashboard, upload, imports, records, needs-review, AI suggestions, plans, approvals, job results) with a persistent **MOCK_MODE** banner. Backend adds list/dashboard APIs. Keep `MOCK_MODE=true`. No real Ansible.
+**Phase 7.5 available:** UI E2E mock test (Playwright happy path + manual checklist in `docs/11-phase75-ui-e2e-mock-test.md`). Keep `MOCK_MODE=true`. No real Ansible.
 
-Also includes Phase 1–6.5 (upload/parse/validate/AI drafts/plans/mock dry-run/run + E2E mock workflow).
+Also includes Phase 1–7 (API + Next.js operator UI with MOCK_MODE banner).
 
 ## Quick start (internal Ansible host)
 
@@ -122,4 +122,5 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 5. Execution plans + approval + audit
 6. Ansible Runner dry-run / run (mock path; real path later when `MOCK_MODE=false`)
 6.5. E2E mock workflow test + CLI
-7. Frontend pages ← **current**
+7. Frontend pages
+7.5. UI E2E mock test (Playwright + manual) ← **current gate before real Ansible**
