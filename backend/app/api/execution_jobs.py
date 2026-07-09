@@ -1,19 +1,33 @@
-"""Execution job endpoints — Phase 5 approve/reject; dry-run/run remain Phase 6."""
+"""Execution job endpoints — Phase 5 approve/reject + Phase 6 mock dry-run/run/results."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.schemas.plans import ExecutionJobResponse, JobReviewRequest
+from app.models.execution_job import ExecutionJob
+from app.models.job_result import JobResult
+from app.schemas.plans import (
+    ExecutionJobResponse,
+    JobExecutionSummaryResponse,
+    JobResultResponse,
+    JobResultsListResponse,
+    JobReviewRequest,
+)
+from app.services.ansible_execution import (
+    AnsibleExecutionError,
+    AnsibleExecutionService,
+    summary_to_dict,
+)
 from app.services.job_approval import JobApprovalError, JobApprovalService
 from app.services.plan_query import PlanQueryService
 
 router = APIRouter()
 
 
-def _job_response(db: Session, job) -> ExecutionJobResponse:
+def _job_response(db: Session, job: ExecutionJob) -> ExecutionJobResponse:
     target_count = PlanQueryService(db).count_job_targets(job.id)
     return ExecutionJobResponse(
         id=job.id,
@@ -32,9 +46,31 @@ def _job_response(db: Session, job) -> ExecutionJobResponse:
     )
 
 
-@router.post("/{job_id}/dry-run", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def dry_run_job(job_id: int) -> None:
-    raise HTTPException(status_code=501, detail="Not implemented yet (Phase 6)")
+def _summary_response(summary) -> JobExecutionSummaryResponse:
+    data = summary_to_dict(summary)
+    return JobExecutionSummaryResponse(**data)
+
+
+@router.post("/{job_id}/dry-run", response_model=JobExecutionSummaryResponse)
+def dry_run_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+) -> JobExecutionSummaryResponse:
+    """Mock dry-run via AnsibleExecutionService (MOCK_MODE path only for MVP).
+
+    Allowed only when job status=waiting_dry_run. Never uses AI draft playbooks.
+    """
+    try:
+        summary = AnsibleExecutionService(db).dry_run_job(job_id)
+    except AnsibleExecutionError as exc:
+        detail = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in detail.lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=detail) from exc
+    return _summary_response(summary)
 
 
 @router.post("/{job_id}/approve", response_model=ExecutionJobResponse)
@@ -43,7 +79,7 @@ def approve_job(
     body: JobReviewRequest | None = None,
     db: Session = Depends(get_db),
 ) -> ExecutionJobResponse:
-    """Approve only when status is dry_run_success. waiting_dry_run → 400 in Phase 5."""
+    """Approve only when status is dry_run_success. waiting_dry_run → 400."""
     payload = body or JobReviewRequest()
     try:
         job = JobApprovalService(db).approve(job_id, reviewed_by=payload.reviewed_by)
@@ -79,12 +115,48 @@ def reject_job(
     return _job_response(db, job)
 
 
-@router.post("/{job_id}/run", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def run_job(job_id: int) -> None:
-    """Real execution — only after dry-run success + approval (Phase 6)."""
-    raise HTTPException(status_code=501, detail="Not implemented yet (Phase 6)")
+@router.post("/{job_id}/run", response_model=JobExecutionSummaryResponse)
+def run_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+) -> JobExecutionSummaryResponse:
+    """Mock apply via AnsibleExecutionService after approval.
+
+    Allowed only when job status=approved. Never uses AI draft playbooks.
+    """
+    try:
+        summary = AnsibleExecutionService(db).run_job(job_id)
+    except AnsibleExecutionError as exc:
+        detail = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in detail.lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=detail) from exc
+    return _summary_response(summary)
 
 
-@router.get("/{job_id}/results", status_code=status.HTTP_501_NOT_IMPLEMENTED)
-def get_job_results(job_id: int) -> None:
-    raise HTTPException(status_code=501, detail="Not implemented yet (Phase 6)")
+@router.get("/{job_id}/results", response_model=JobResultsListResponse)
+def get_job_results(
+    job_id: int,
+    db: Session = Depends(get_db),
+) -> JobResultsListResponse:
+    """GET /execution-jobs/{job_id}/results — per-host mock/real results."""
+    job = db.get(ExecutionJob, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution job not found")
+
+    rows = db.scalars(
+        select(JobResult)
+        .where(JobResult.job_id == job_id)
+        .order_by(JobResult.id.asc())
+    ).all()
+
+    return JobResultsListResponse(
+        job_id=job_id,
+        job_status=job.status,
+        dry_run_status=job.dry_run_status,
+        total=len(rows),
+        items=[JobResultResponse.model_validate(row) for row in rows],
+    )

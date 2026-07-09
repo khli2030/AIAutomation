@@ -407,7 +407,7 @@ def test_phase5_never_uses_ai_generated_playbook_or_suggestions() -> None:
     import app.services.job_approval as approval_mod
     import app.services.plan_generator as generator_mod
 
-    for mod in (generator_mod, approval_mod, plans_api, jobs_api):
+    for mod in (generator_mod, approval_mod, plans_api):
         roots = _imported_roots(mod.__file__)
         assert "ai_suggestions" not in roots
         assert "ai_analyzer" not in roots
@@ -415,6 +415,13 @@ def test_phase5_never_uses_ai_generated_playbook_or_suggestions() -> None:
         src = Path(mod.__file__).read_text(encoding="utf-8")
         assert "AIRemediationSuggestion" not in src
         assert "generated_playbook" not in src or "used_ai_generated_playbook" in src
+
+    # execution_jobs (Phase 6) may mention AI drafts in docs, but must not import AI models.
+    jobs_roots = _imported_roots(jobs_api.__file__)
+    assert "ai_suggestions" not in jobs_roots
+    assert "ai_analyzer" not in jobs_roots
+    assert "ai_remediation_suggestion" not in jobs_roots
+    assert "AIRemediationSuggestion" not in Path(jobs_api.__file__).read_text(encoding="utf-8")
 
 
 def test_phase5_modules_no_ansible_mock_subprocess_ssh() -> None:
@@ -434,13 +441,14 @@ def test_phase5_modules_no_ansible_mock_subprocess_ssh() -> None:
         assert "from subprocess" not in src
 
     jobs_roots = _imported_roots(jobs_api.__file__)
-    for forbidden in FORBIDDEN_IMPORT_ROOTS:
+    # Phase 6 wires AnsibleExecutionService into execution_jobs; still forbid shell/SSH libs.
+    for forbidden in ("subprocess", "paramiko", "ansible_runner", "real_ansible_runner", "openai"):
         assert forbidden not in jobs_roots
     jobs_src = Path(jobs_api.__file__).read_text(encoding="utf-8")
-    assert "AnsibleExecutionService" not in jobs_src
-    assert "Not implemented yet (Phase 6)" in jobs_src
+    assert "AnsibleExecutionService" in jobs_src  # Phase 6 mock dry-run/run
+    assert "import subprocess" not in jobs_src
+    assert "from subprocess" not in jobs_src
 
-    # generate-plan handler must not call execution services
     imports_src = Path(imports_api.__file__).read_text(encoding="utf-8")
     tree = ast.parse(imports_src)
     gen_node = next(

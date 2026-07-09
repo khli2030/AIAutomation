@@ -58,7 +58,7 @@ class JobApprovalService:
         if job.status == JobStatus.WAITING_DRY_RUN.value:
             raise JobApprovalError(
                 "Approve is blocked until dry-run succeeds "
-                "(job status is waiting_dry_run; dry-run is not implemented in Phase 5)"
+                "(job status is waiting_dry_run)"
             )
         if job.status not in APPROVABLE_STATUSES:
             raise JobApprovalError(

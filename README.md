@@ -47,9 +47,9 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 5 available:** `POST /imports/{batch_id}/generate-plan` builds jobs from `READY_FOR_PLAN` + enabled catalog only (`waiting_dry_run`). Approve blocked until dry-run success; dry-run/run remain Phase 6. No Ansible execution.
+**Phase 6 available:** mock dry-run / run / results via `AnsibleExecutionService` (`MOCK_MODE=true` default). Approve still requires `dry_run_success`. No real Ansible Runner, subprocess, or SSH.
 
-Also includes Phase 1–4 (upload/parse/validate/AI drafts) and `MOCK_MODE` (default true — no real Ansible).
+Also includes Phase 1–5 (upload/parse/validate/AI drafts/plans) and `MOCK_MODE` (default true — no real Ansible).
 
 ## Quick start (internal Ansible host)
 
@@ -101,6 +101,6 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 2. Excel upload + chunked parse
 3. Validation + classifier + asset match
 4. AI analyzer interface + suggestions
-5. Execution plans + approval + audit ← **current**
-6. Ansible Runner dry-run / run (real path when `MOCK_MODE=false`)
+5. Execution plans + approval + audit
+6. Ansible Runner dry-run / run (real path when `MOCK_MODE=false`) ← **current (mock path)**
 7. Frontend pages
