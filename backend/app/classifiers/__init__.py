@@ -1,4 +1,4 @@
-"""Classifier package — rule-based task_code mapping (Phase 3)."""
+"""Classifier package — rule-based task_code mapping (Phase 3 + 9A)."""
 
 from app.classifiers.rules import ClassificationResult, classify_record
 

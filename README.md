@@ -47,9 +47,11 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
-**Phase 8C available:** Lab-only real Ansible **dry-run** (ansible-runner `--check`). Defaults remain `MOCK_MODE=true` and `REAL_ANSIBLE_ENABLED=false`. Real apply/run stays blocked. See [`docs/14-phase8c-lab-real-dry-run.md`](docs/14-phase8c-lab-real-dry-run.md).
+**Phase 9A available:** Top Qualys rule coverage expansion (exact `qualys_control_id` + conservative text fallback + catalog entries). Defaults remain `MOCK_MODE=true` and `REAL_ANSIBLE_ENABLED=false`. See [`docs/15-phase9a-qualys-rule-coverage.md`](docs/15-phase9a-qualys-rule-coverage.md).
 
-**Phase 8C.5:** Lab real dry-run **smoke test** docs + checklist (no auto Ansible; no real apply). See [`docs/14-phase8c5-lab-real-dry-run-smoke-test.md`](docs/14-phase8c5-lab-real-dry-run-smoke-test.md) and `./scripts/lab_real_dry_run_checklist.sh`.
+**Phase 8C available:** Lab-only real Ansible **dry-run** (ansible-runner `--check`). Real apply/run stays blocked. See [`docs/14-phase8c-lab-real-dry-run.md`](docs/14-phase8c-lab-real-dry-run.md).
+
+**Phase 8C.5:** Lab real dry-run **smoke test** docs + checklist. See [`docs/14-phase8c5-lab-real-dry-run-smoke-test.md`](docs/14-phase8c5-lab-real-dry-run-smoke-test.md).
 
 Also includes Phase 1–8B (API + Next.js + MVP RBAC + readiness gates).
 
@@ -143,5 +145,6 @@ See [`docs/01-project-structure.md`](docs/01-project-structure.md), [`docs/02-ph
 8A. Minimal MVP RBAC (role tokens)
 8B. Real Ansible readiness (lab/test gates + preflight)
 8C. Lab-only real Ansible dry-run (ansible-runner --check)
-8C.5. Lab real dry-run smoke test docs + checklist ← **current**
+8C.5. Lab real dry-run smoke test docs + checklist
+9A. Top Qualys rule coverage expansion (classifier + catalog) ← **current**
 8. Full real Ansible apply/run (not started — keep defaults safe)

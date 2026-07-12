@@ -1,0 +1,14 @@
+---
+# Phase 9A catalog playbook stub — implement safely in a later phase.
+# Must never be generated from Excel Remediation text or AI drafts.
+# Expected: net.ipv6.conf.default.accept_ra = 0
+
+- name: Disable IPv6 accept_ra
+  hosts: all
+  become: true
+  serial: 20
+  gather_facts: false
+  tasks:
+    - name: Placeholder — not implemented
+      ansible.builtin.debug:
+        msg: "Playbook stub for SYSCTL_IPV6_ACCEPT_RA_DISABLE"
