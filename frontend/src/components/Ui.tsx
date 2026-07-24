@@ -1,5 +1,7 @@
 "use client";
 
+import { useEffect, useId, useRef } from "react";
+
 export function StatusBadge({ status }: { status?: string | null }) {
   if (!status) return <span className="badge">—</span>;
   const s = status.toLowerCase();
@@ -63,6 +65,78 @@ export function CounterMap({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Simple confirmation modal for bulk / destructive workflow actions. */
+export function ConfirmModal({
+  open,
+  title,
+  body,
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  danger = false,
+  busy = false,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  body: string;
+  confirmLabel?: string;
+  cancelLabel?: string;
+  danger?: boolean;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const titleId = useId();
+  const confirmRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (open) confirmRef.current?.focus();
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onClick={() => {
+        if (!busy) onCancel();
+      }}
+    >
+      <div
+        className="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 id={titleId}>{title}</h2>
+        <p>{body}</p>
+        <div className="btn-row">
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={onCancel}
+          >
+            {cancelLabel}
+          </button>
+          <button
+            ref={confirmRef}
+            className={`btn ${danger ? "danger" : "primary"}`}
+            type="button"
+            disabled={busy}
+            onClick={onConfirm}
+          >
+            {busy ? "Working…" : confirmLabel}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

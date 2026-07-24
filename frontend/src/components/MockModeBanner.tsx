@@ -3,6 +3,11 @@
 import { useEffect, useState } from "react";
 import { ApiError, fetchRootMeta, getApiBase, getAdminToken } from "@/lib/api";
 
+/**
+ * Always-visible execution-mode banner on operational pages (via root layout).
+ * MOCK_MODE=true (default): safe lab copy.
+ * MOCK_MODE=false: stronger warning; backend gates still apply.
+ */
 export function MockModeBanner() {
   const [mockMode, setMockMode] = useState<boolean | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -12,7 +17,7 @@ export function MockModeBanner() {
     async function load() {
       if (!getAdminToken()) {
         setMockMode(true);
-        setError("Set ADMIN_TOKEN in Settings to connect to the API.");
+        setError("Set a role token in Settings to connect to the API.");
         return;
       }
       try {
@@ -38,18 +43,17 @@ export function MockModeBanner() {
     };
   }, []);
 
-  const showMock = mockMode !== false;
-
-  if (!showMock && !error) return null;
+  const isMock = mockMode !== false;
+  const bannerClass = isMock ? "mock-banner" : "mock-banner real-banner";
+  const tag = isMock ? "MOCK MODE" : "REAL EXECUTION MODE";
+  const message = isMock
+    ? "MOCK MODE: no SSH or Ansible execution is performed."
+    : "REAL EXECUTION MODE: actions may affect servers. Backend gates still apply.";
 
   return (
-    <div className="mock-banner" role="status">
-      <span className="tag">MOCK_MODE</span>
-      <span>
-        {showMock
-          ? "Safe lab mode: no ansible-runner, ansible-playbook, subprocess, shell, or SSH."
-          : "API reports MOCK_MODE=false — real Ansible is still not implemented; keep mock on."}
-      </span>
+    <div className={bannerClass} role="status">
+      <span className="tag">{tag}</span>
+      <span>{message}</span>
       <span className="muted" style={{ marginLeft: "auto", fontWeight: 500 }}>
         API {getApiBase()}
         {error ? ` · ${error}` : ""}
