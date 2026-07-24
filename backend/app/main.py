@@ -46,6 +46,10 @@ class RoleTokenMiddleware(BaseHTTPMiddleware):
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         path = request.url.path.rstrip("/") or "/"
         if path == "/health":
             return await call_next(request)
