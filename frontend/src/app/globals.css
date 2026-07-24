@@ -124,6 +124,17 @@ button {
   flex-wrap: wrap;
 }
 
+.mock-banner.real-banner {
+  background: #2a1010;
+  border-bottom: 1px solid #8a3030;
+  color: #ffb4b4;
+}
+
+.mock-banner.real-banner .tag {
+  background: var(--danger);
+  color: #1a0505;
+}
+
 .mock-banner .tag {
   background: var(--mock);
   color: #1a1205;
@@ -224,6 +235,41 @@ table.data th {
 
 table.data tr:hover td {
   background: rgba(255, 255, 255, 0.02);
+}
+
+table.data tr.row-failed td {
+  background: rgba(239, 107, 107, 0.08);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.modal-dialog {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem;
+  max-width: 32rem;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+}
+
+.modal-dialog h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+}
+
+.modal-dialog p {
+  margin: 0 0 1rem;
+  color: var(--text-muted);
 }
 
 .badge {

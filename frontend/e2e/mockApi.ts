@@ -1,5 +1,5 @@
 /**
- * Stateful FastAPI mock for Phase 7.5 Playwright UI E2E.
+ * Stateful FastAPI mock for Phase 7.5 / 9B Playwright UI E2E.
  * Simulates MOCK_MODE backend responses only — never Ansible/SSH/subprocess.
  */
 
@@ -8,34 +8,71 @@ import type { Page, Route } from "@playwright/test";
 type JobStatus =
   | "waiting_dry_run"
   | "dry_run_success"
+  | "dry_run_failed"
+  | "waiting_approval"
   | "approved"
   | "success"
   | "failed"
-  | "partially_failed";
+  | "partially_failed"
+  | "rejected";
+
+export type MockJob = {
+  id: number;
+  status: JobStatus;
+  dryRunResults: boolean;
+  runResults: boolean;
+  task_code: string;
+  environment: string;
+  criticality: string;
+  ansible_group: string;
+  target_count: number;
+};
 
 export type MockApiState = {
   batchId: number;
   planId: number;
-  jobId: number;
   batchStatus: string;
   validated: boolean;
-  jobStatus: JobStatus;
-  dryRunResults: boolean;
-  runResults: boolean;
+  jobs: MockJob[];
+  /** Role returned by GET /auth/me (default admin for full UI access). */
+  role: "viewer" | "operator" | "approver" | "admin";
+  /** Track dry-run/approve/run POST calls for assertions. */
+  calls: { dryRun: number[]; approve: number[]; run: number[]; reject: number[] };
+};
+
+export type InstallMockOptions = {
+  role?: MockApiState["role"];
+  jobCount?: number;
 };
 
 const now = () => new Date().toISOString();
 
-export function createInitialState(): MockApiState {
+function makeJobs(count: number): MockJob[] {
+  return Array.from({ length: count }, (_, i) => ({
+    id: i + 1,
+    status: "waiting_dry_run" as const,
+    dryRunResults: false,
+    runResults: false,
+    task_code: "SSH_DISABLE_ROOT_LOGIN",
+    environment: "test",
+    criticality: "High",
+    ansible_group: "linux_test",
+    target_count: 2,
+  }));
+}
+
+export function createInitialState(
+  options: InstallMockOptions = {},
+): MockApiState {
+  const jobCount = options.jobCount ?? 1;
   return {
     batchId: 1,
     planId: 1,
-    jobId: 1,
     batchStatus: "parsed",
     validated: false,
-    jobStatus: "waiting_dry_run",
-    dryRunResults: false,
-    runResults: false,
+    jobs: makeJobs(jobCount),
+    role: options.role ?? "admin",
+    calls: { dryRun: [], approve: [], run: [], reject: [] },
   };
 }
 
@@ -45,6 +82,25 @@ function json(route: Route, status: number, body: unknown) {
     contentType: "application/json",
     body: JSON.stringify(body),
   });
+}
+
+function permissionsFor(role: MockApiState["role"]) {
+  const isAdmin = role === "admin";
+  const isOperator = role === "operator" || isAdmin;
+  const isApprover = role === "approver" || isAdmin;
+  return {
+    can_upload: isOperator,
+    can_validate: isOperator,
+    can_generate_plan: isOperator,
+    can_dry_run: isOperator,
+    can_run: isOperator,
+    can_approve_job: isApprover,
+    can_reject_job: isApprover,
+    can_approve_suggestion: isApprover,
+    can_reject_suggestion: isApprover,
+    can_convert_catalog: isAdmin,
+    can_ai_analyze: isOperator,
+  };
 }
 
 function batch(state: MockApiState) {
@@ -113,39 +169,40 @@ function records(state: MockApiState) {
   };
 }
 
-function job(state: MockApiState) {
+function jobPayload(j: MockJob, planId: number) {
   return {
-    id: state.jobId,
-    plan_id: state.planId,
-    task_code: "SSH_DISABLE_ROOT_LOGIN",
-    environment: "test",
-    criticality: "High",
-    ansible_group: "linux_test",
-    status: state.jobStatus,
-    dry_run_status:
-      state.jobStatus === "waiting_dry_run" ? null : "dry_run_success",
-    approved_by: state.jobStatus === "approved" || state.jobStatus === "success"
-      ? "ui-e2e"
-      : null,
-    approved_at:
-      state.jobStatus === "approved" || state.jobStatus === "success"
-        ? now()
+    id: j.id,
+    plan_id: planId,
+    task_code: j.task_code,
+    environment: j.environment,
+    criticality: j.criticality,
+    ansible_group: j.ansible_group,
+    status: j.status,
+    dry_run_status: j.dryRunResults
+      ? "dry_run_success"
+      : j.status === "dry_run_failed"
+        ? "dry_run_failed"
         : null,
-    started_at: state.dryRunResults ? now() : null,
-    finished_at: state.runResults ? now() : null,
-    target_count: 2,
+    approved_by:
+      j.status === "approved" || j.status === "success" ? "ui-e2e" : null,
+    approved_at:
+      j.status === "approved" || j.status === "success" ? now() : null,
+    started_at: j.dryRunResults || j.status === "dry_run_failed" ? now() : null,
+    finished_at: j.runResults ? now() : null,
+    target_count: j.target_count,
   };
 }
 
 function plan(state: MockApiState) {
+  const targetCount = state.jobs.reduce((n, j) => n + j.target_count, 0);
   return {
     id: state.planId,
     batch_id: state.batchId,
-    status: "draft",
+    status: "generated",
     created_by: "ui-e2e",
     created_at: now(),
-    job_count: 1,
-    target_count: 2,
+    job_count: state.jobs.length,
+    target_count: targetCount,
     skipped_records: 0,
     ready_for_plan_records: 2,
     skipped_missing_catalog: 0,
@@ -156,44 +213,45 @@ function plan(state: MockApiState) {
   };
 }
 
-function dryRunItems(state: MockApiState) {
-  if (!state.dryRunResults) return [];
+function dryRunItems(j: MockJob) {
+  if (!j.dryRunResults && j.status !== "dry_run_failed") return [];
+  const failed = j.status === "dry_run_failed";
   return [
     {
-      id: 101,
-      job_id: state.jobId,
+      id: 100 + j.id * 10,
+      job_id: j.id,
       result_type: "dry_run",
       device_name: "e2e-linux-01",
-      status: "success",
+      status: failed ? "failed" : "success",
       changed: false,
       skipped: false,
-      stdout: "MOCK dry_run ok",
-      stderr: "",
-      return_code: 0,
+      stdout: failed ? "" : "MOCK dry_run ok",
+      stderr: failed ? "MOCK dry_run failed: host unreachable" : "",
+      return_code: failed ? 1 : 0,
       created_at: now(),
     },
     {
-      id: 102,
-      job_id: state.jobId,
+      id: 101 + j.id * 10,
+      job_id: j.id,
       result_type: "dry_run",
       device_name: "e2e-linux-02",
-      status: "success",
+      status: failed ? "failed" : "success",
       changed: false,
       skipped: false,
-      stdout: "MOCK dry_run ok",
-      stderr: "",
-      return_code: 0,
+      stdout: failed ? "" : "MOCK dry_run ok",
+      stderr: failed ? "MOCK dry_run failed: check mode error" : "",
+      return_code: failed ? 1 : 0,
       created_at: now(),
     },
   ];
 }
 
-function runItems(state: MockApiState) {
-  if (!state.runResults) return [];
+function runItems(j: MockJob) {
+  if (!j.runResults) return [];
   return [
     {
-      id: 201,
-      job_id: state.jobId,
+      id: 200 + j.id * 10,
+      job_id: j.id,
       result_type: "run",
       device_name: "e2e-linux-01",
       status: "success",
@@ -205,8 +263,8 @@ function runItems(state: MockApiState) {
       created_at: now(),
     },
     {
-      id: 202,
-      job_id: state.jobId,
+      id: 201 + j.id * 10,
+      job_id: j.id,
       result_type: "run",
       device_name: "e2e-linux-02",
       status: "success",
@@ -220,22 +278,52 @@ function runItems(state: MockApiState) {
   ];
 }
 
-export async function installMockApi(page: Page, state: MockApiState) {
+function findJob(state: MockApiState, jobId: number): MockJob | undefined {
+  return state.jobs.find((j) => j.id === jobId);
+}
+
+function parseJobId(path: string): number | null {
+  const m = path.match(/^\/execution-jobs\/(\d+)(?:\/|$)/);
+  return m ? Number(m[1]) : null;
+}
+
+export async function installMockApi(
+  page: Page,
+  state: MockApiState,
+  options: InstallMockOptions = {},
+) {
+  if (options.role) state.role = options.role;
+  if (options.jobCount && options.jobCount !== state.jobs.length) {
+    state.jobs = makeJobs(options.jobCount);
+  }
+
   await page.route("http://127.0.0.1:8000/**", async (route) => {
     const req = route.request();
     const method = req.method();
     const url = new URL(req.url());
     const path = url.pathname.replace(/\/$/, "") || "/";
 
-    // Public-ish / root meta
     if (method === "GET" && path === "/") {
       return json(route, 200, {
         app: "compliance-remediation-platform",
         env: "test",
         docs: "/docs",
-        phase: "7",
-        auth: "ADMIN_TOKEN required",
+        phase: "9B",
+        auth: "role token required",
         mock_mode: "true",
+        role: state.role,
+      });
+    }
+
+    if (method === "GET" && path === "/auth/me") {
+      const perms = permissionsFor(state.role);
+      return json(route, 200, {
+        role: state.role,
+        actor: `ui-e2e-${state.role}`,
+        token_name: `${state.role.toUpperCase()}_TOKEN`,
+        mock_mode: true,
+        mvp_auth_warning: "MVP token auth only",
+        ...perms,
       });
     }
 
@@ -244,6 +332,10 @@ export async function installMockApi(page: Page, state: MockApiState) {
     }
 
     if (method === "GET" && path === "/dashboard/summary") {
+      const byStatus: Record<string, number> = {};
+      for (const j of state.jobs) {
+        byStatus[j.status] = (byStatus[j.status] || 0) + 1;
+      }
       return json(route, 200, {
         mock_mode: true,
         import_batches_total: 1,
@@ -252,13 +344,15 @@ export async function installMockApi(page: Page, state: MockApiState) {
         records_by_validation_status: state.validated
           ? { READY_FOR_PLAN: 2 }
           : {},
-        jobs_total: state.validated ? 1 : 0,
-        jobs_by_status: state.validated ? { [state.jobStatus]: 1 } : {},
+        jobs_total: state.validated ? state.jobs.length : 0,
+        jobs_by_status: state.validated ? byStatus : {},
         plans_total: state.validated ? 1 : 0,
         suggestions_total: 1,
         suggestions_by_status: { draft: 1 },
         latest_imports: [batch(state)],
-        latest_jobs: state.validated ? [job(state)] : [],
+        latest_jobs: state.validated
+          ? state.jobs.map((j) => jobPayload(j, state.planId))
+          : [],
         generated_at: now(),
       });
     }
@@ -315,7 +409,11 @@ export async function installMockApi(page: Page, state: MockApiState) {
       method === "POST" &&
       path === `/imports/${state.batchId}/generate-plan`
     ) {
-      state.jobStatus = "waiting_dry_run";
+      for (const j of state.jobs) {
+        j.status = "waiting_dry_run";
+        j.dryRunResults = false;
+        j.runResults = false;
+      }
       return json(route, 200, {
         plan: plan(state),
         message:
@@ -356,105 +454,113 @@ export async function installMockApi(page: Page, state: MockApiState) {
     ) {
       return json(route, 200, {
         plan_id: state.planId,
-        total: 1,
-        items: [job(state)],
+        total: state.jobs.length,
+        items: state.jobs.map((j) => jobPayload(j, state.planId)),
       });
     }
 
     if (method === "GET" && path === "/execution-jobs") {
+      const status = url.searchParams.get("status");
+      let items = state.jobs.map((j) => jobPayload(j, state.planId));
+      if (status) items = items.filter((j) => j.status === status);
       return json(route, 200, {
-        total: 1,
+        total: items.length,
         limit: 100,
         offset: 0,
-        items: [job(state)],
-      });
-    }
-
-    if (method === "GET" && path === `/execution-jobs/${state.jobId}`) {
-      return json(route, 200, job(state));
-    }
-
-    if (
-      method === "POST" &&
-      path === `/execution-jobs/${state.jobId}/dry-run`
-    ) {
-      state.jobStatus = "dry_run_success";
-      state.dryRunResults = true;
-      return json(route, 200, {
-        job_id: state.jobId,
-        mode: "dry_run",
-        mock_mode: true,
-        status: "dry_run_success",
-        dry_run_status: "dry_run_success",
-        hosts_total: 2,
-        hosts_success: 2,
-        hosts_failed: 0,
-        hosts_changed: 0,
-        hosts_skipped: 0,
-        message: "Mock execution only — no ansible-runner, subprocess, or SSH.",
-      });
-    }
-
-    if (
-      method === "POST" &&
-      path === `/execution-jobs/${state.jobId}/approve`
-    ) {
-      if (state.jobStatus !== "dry_run_success") {
-        return json(route, 400, {
-          detail: "Approve allowed only when status=dry_run_success",
-        });
-      }
-      state.jobStatus = "approved";
-      return json(route, 200, job(state));
-    }
-
-    if (
-      method === "POST" &&
-      path === `/execution-jobs/${state.jobId}/reject`
-    ) {
-      state.jobStatus = "waiting_dry_run";
-      return json(route, 200, { ...job(state), status: "rejected" });
-    }
-
-    if (method === "POST" && path === `/execution-jobs/${state.jobId}/run`) {
-      if (state.jobStatus !== "approved") {
-        return json(route, 400, {
-          detail: "Run allowed only when job status=approved",
-        });
-      }
-      state.jobStatus = "success";
-      state.runResults = true;
-      return json(route, 200, {
-        job_id: state.jobId,
-        mode: "apply",
-        mock_mode: true,
-        status: "success",
-        dry_run_status: "dry_run_success",
-        hosts_total: 2,
-        hosts_success: 2,
-        hosts_failed: 0,
-        hosts_changed: 2,
-        hosts_skipped: 0,
-        message: "Mock execution only — no ansible-runner, subprocess, or SSH.",
-      });
-    }
-
-    if (
-      method === "GET" &&
-      path === `/execution-jobs/${state.jobId}/results`
-    ) {
-      const rt = url.searchParams.get("result_type");
-      let items = [...dryRunItems(state), ...runItems(state)];
-      if (rt === "dry_run") items = dryRunItems(state);
-      if (rt === "run") items = runItems(state);
-      return json(route, 200, {
-        job_id: state.jobId,
-        job_status: state.jobStatus,
-        dry_run_status: state.dryRunResults ? "dry_run_success" : null,
-        result_type_filter: rt,
-        total: items.length,
         items,
       });
+    }
+
+    const jobId = parseJobId(path);
+    if (jobId != null) {
+      const j = findJob(state, jobId);
+      if (!j) {
+        return json(route, 404, { detail: `Job ${jobId} not found` });
+      }
+
+      if (method === "GET" && path === `/execution-jobs/${jobId}`) {
+        return json(route, 200, jobPayload(j, state.planId));
+      }
+
+      if (method === "POST" && path === `/execution-jobs/${jobId}/dry-run`) {
+        state.calls.dryRun.push(jobId);
+        if (j.status !== "waiting_dry_run" && j.status !== "dry_run_failed") {
+          return json(route, 400, {
+            detail: `Dry-run not allowed for status=${j.status}`,
+          });
+        }
+        j.status = "dry_run_success";
+        j.dryRunResults = true;
+        return json(route, 200, {
+          job_id: jobId,
+          mode: "dry_run",
+          mock_mode: true,
+          status: "dry_run_success",
+          dry_run_status: "dry_run_success",
+          hosts_total: 2,
+          hosts_success: 2,
+          hosts_failed: 0,
+          hosts_changed: 0,
+          hosts_skipped: 0,
+          message: "Mock execution only — no ansible-runner, subprocess, or SSH.",
+        });
+      }
+
+      if (method === "POST" && path === `/execution-jobs/${jobId}/approve`) {
+        state.calls.approve.push(jobId);
+        if (j.status !== "dry_run_success") {
+          return json(route, 400, {
+            detail: "Approve allowed only when status=dry_run_success",
+          });
+        }
+        j.status = "approved";
+        return json(route, 200, jobPayload(j, state.planId));
+      }
+
+      if (method === "POST" && path === `/execution-jobs/${jobId}/reject`) {
+        state.calls.reject.push(jobId);
+        j.status = "rejected";
+        return json(route, 200, jobPayload(j, state.planId));
+      }
+
+      if (method === "POST" && path === `/execution-jobs/${jobId}/run`) {
+        state.calls.run.push(jobId);
+        if (j.status !== "approved") {
+          return json(route, 400, {
+            detail: "Run allowed only when job status=approved",
+          });
+        }
+        j.status = "success";
+        j.runResults = true;
+        return json(route, 200, {
+          job_id: jobId,
+          mode: "apply",
+          mock_mode: true,
+          status: "success",
+          dry_run_status: "dry_run_success",
+          hosts_total: 2,
+          hosts_success: 2,
+          hosts_failed: 0,
+          hosts_changed: 2,
+          hosts_skipped: 0,
+          message: "Mock execution only — no ansible-runner, subprocess, or SSH.",
+        });
+      }
+
+      if (method === "GET" && path === `/execution-jobs/${jobId}/results`) {
+        const rt = url.searchParams.get("result_type");
+        let items = [...dryRunItems(j), ...runItems(j)];
+        if (rt === "dry_run") items = dryRunItems(j);
+        if (rt === "run") items = runItems(j);
+        return json(route, 200, {
+          job_id: jobId,
+          job_status: j.status,
+          dry_run_status: j.dryRunResults ? "dry_run_success" : null,
+          result_type_filter: rt,
+          total: items.length,
+          items,
+        });
+      }
     }
 
     if (method === "GET" && path === "/ai-suggestions") {

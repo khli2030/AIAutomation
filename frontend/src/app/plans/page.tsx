@@ -2,116 +2,97 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
-import { ApiError, listPlanJobs, listPlans } from "@/lib/api";
-import type { ExecutionJob, ExecutionPlan } from "@/types/api";
+import { ApiError, listPlans } from "@/lib/api";
+import type { ExecutionPlan } from "@/types/api";
 import { ErrorBox, StatusBadge } from "@/components/Ui";
 
 export default function PlansPage() {
   const [plans, setPlans] = useState<ExecutionPlan[]>([]);
-  const [selected, setSelected] = useState<ExecutionPlan | null>(null);
-  const [jobs, setJobs] = useState<ExecutionJob[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    void listPlans(100, 0)
-      .then((res) => setPlans(res.items))
-      .catch((err) =>
-        setError(err instanceof ApiError ? err.detail : String(err)),
-      );
-  }, []);
-
-  async function openPlan(plan: ExecutionPlan) {
-    setSelected(plan);
-    setError(null);
+  async function refresh() {
+    setBusy(true);
     try {
-      const res = await listPlanJobs(plan.id);
-      setJobs(res.items);
+      const res = await listPlans(100, 0);
+      setPlans(res.items);
+      setError(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.detail : String(err));
+    } finally {
+      setBusy(false);
     }
   }
+
+  useEffect(() => {
+    void refresh();
+  }, []);
 
   return (
     <div>
       <div className="page-header">
         <h1>Execution Plans</h1>
         <p>
-          Plans and jobs created from READY_FOR_PLAN records. Jobs start in{" "}
-          <code>waiting_dry_run</code> — use Job Approval for mock dry-run.
+          Plans generated from READY_FOR_PLAN records. Open a plan to dry-run,
+          approve, and run jobs from the UI (no curl required).
         </p>
       </div>
       <ErrorBox message={error} />
-      <div className="two-col">
-        <div className="panel">
-          <h2>Plans ({plans.length})</h2>
-          <div className="table-wrap">
-            <table className="data">
-              <thead>
-                <tr>
-                  <th>ID</th>
-                  <th>Batch</th>
-                  <th>Status</th>
-                  <th>Jobs</th>
-                  <th>Targets</th>
-                </tr>
-              </thead>
-              <tbody>
-                {plans.map((p) => (
-                  <tr
-                    key={p.id}
-                    onClick={() => void openPlan(p)}
-                    style={{ cursor: "pointer" }}
-                  >
-                    <td>
-                      <Link href={`/plans/${p.id}`}>{p.id}</Link>
-                    </td>
-                    <td>{p.batch_id}</td>
-                    <td>
-                      <StatusBadge status={p.status} />
-                    </td>
-                    <td>{p.job_count}</td>
-                    <td>{p.target_count}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      <div className="panel">
+        <div className="btn-row">
+          <button
+            className="btn"
+            type="button"
+            disabled={busy}
+            onClick={() => void refresh()}
+          >
+            Refresh
+          </button>
         </div>
-        <div className="panel">
-          <h2>
-            Jobs
-            {selected ? ` for plan #${selected.id}` : ""}
-          </h2>
-          {!selected ? (
-            <p className="muted">Select a plan.</p>
-          ) : (
-            <div className="table-wrap">
-              <table className="data">
-                <thead>
-                  <tr>
-                    <th>Job</th>
-                    <th>Task</th>
-                    <th>Status</th>
-                    <th>Targets</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {jobs.map((j) => (
-                    <tr key={j.id}>
-                      <td>
-                        <Link href={`/approvals?jobId=${j.id}`}>{j.id}</Link>
-                      </td>
-                      <td className="mono">{j.task_code}</td>
-                      <td>
-                        <StatusBadge status={j.status} />
-                      </td>
-                      <td>{j.target_count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+        <h2>Plans ({plans.length})</h2>
+        <div className="table-wrap">
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Plan ID</th>
+                <th>Batch ID</th>
+                <th>Status</th>
+                <th>Job count</th>
+                <th>Target count</th>
+                <th>Created by</th>
+                <th>Created at</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {plans.map((p) => (
+                <tr key={p.id} data-testid={`plan-row-${p.id}`}>
+                  <td>
+                    <Link href={`/plans/${p.id}`}>{p.id}</Link>
+                  </td>
+                  <td>{p.batch_id}</td>
+                  <td>
+                    <StatusBadge status={p.status} />
+                  </td>
+                  <td>{p.job_count}</td>
+                  <td>{p.target_count}</td>
+                  <td>{p.created_by || "—"}</td>
+                  <td className="mono" style={{ fontSize: "0.8rem" }}>
+                    {p.created_at}
+                  </td>
+                  <td>
+                    <Link
+                      className="btn"
+                      href={`/plans/${p.id}`}
+                      data-testid={`view-jobs-${p.id}`}
+                    >
+                      View Jobs
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
