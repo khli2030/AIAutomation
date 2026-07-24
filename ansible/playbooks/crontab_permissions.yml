@@ -1,0 +1,14 @@
+---
+# Phase 9A catalog playbook stub — implement safely in a later phase.
+# Must never be generated from Excel Remediation text or AI drafts.
+# Expected: chmod 600 /etc/crontab
+
+- name: Set /etc/crontab permissions
+  hosts: all
+  become: true
+  serial: 20
+  gather_facts: false
+  tasks:
+    - name: Placeholder — not implemented
+      ansible.builtin.debug:
+        msg: "Playbook stub for CRONTAB_PERMISSIONS"

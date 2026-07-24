@@ -120,8 +120,12 @@ def test_e2e_mock_workflow_full_path(
             .filter(RemediationCatalog.is_enabled.is_(True))
             .all()
         )
-        assert any(c.task_code == "SSH_DISABLE_ROOT_LOGIN" for c in enabled)
-        assert all(c.task_code == "SSH_DISABLE_ROOT_LOGIN" for c in enabled)
+        enabled_codes = {c.task_code for c in enabled}
+        assert "SSH_DISABLE_ROOT_LOGIN" in enabled_codes
+        # Phase 9A enables additional catalog entries for MVP/mock plan coverage.
+        from app.db.seed_remediation_catalog import PHASE9A_TASK_CODES
+
+        assert PHASE9A_TASK_CODES.issubset(enabled_codes)
     finally:
         db.close()
 

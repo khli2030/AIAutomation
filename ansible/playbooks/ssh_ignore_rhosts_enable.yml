@@ -1,0 +1,14 @@
+---
+# Phase 9A catalog playbook stub — implement safely in a later phase.
+# Must never be generated from Excel Remediation text or AI drafts.
+# Expected: IgnoreRhosts yes
+
+- name: Enable SSH IgnoreRhosts
+  hosts: all
+  become: true
+  serial: 20
+  gather_facts: false
+  tasks:
+    - name: Placeholder — not implemented
+      ansible.builtin.debug:
+        msg: "Playbook stub for SSH_IGNORE_RHOSTS_ENABLE"
