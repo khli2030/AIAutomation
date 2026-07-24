@@ -57,6 +57,7 @@ export default function PlanDetailPage() {
 
   const statusCounts = useMemo(() => countByStatus(jobs), [jobs]);
   const waitingCount = filterJobsForBulk(jobs, "dry_run").length;
+  const failedDryRunCount = filterJobsForBulk(jobs, "retry_dry_run").length;
   const dryRunSuccessCount = filterJobsForBulk(jobs, "approve").length;
   const approvedCount = filterJobsForBulk(jobs, "run").length;
 
@@ -134,6 +135,12 @@ export default function PlanDetailPage() {
         body: `Dry-run ${waitingCount} job(s) in waiting_dry_run only? Never runs apply. Continue on individual failures.`,
       };
     }
+    if (kind === "retry_dry_run") {
+      return {
+        title: "Retry failed dry-runs",
+        body: `Retry dry-run for ${failedDryRunCount} job(s) with status dry_run_failed only? Calls POST …/dry-run again. Never approves or runs failed jobs.`,
+      };
+    }
     if (kind === "approve") {
       return {
         title: "Bulk approve",
@@ -142,7 +149,7 @@ export default function PlanDetailPage() {
     }
     return {
       title: "Bulk run",
-      body: `Run ${approvedCount} approved job(s) only? Jobs still in dry_run_success are never run directly.`,
+      body: `Run ${approvedCount} approved job(s) only? dry_run_failed and dry_run_success jobs are never run directly.`,
     };
   }
 
@@ -186,8 +193,9 @@ export default function PlanDetailPage() {
         <p>
           <Link href="/plans">← All plans</Link>
           {" · "}
-          Per-job and bulk dry-run / approve / run with status + role gates.
-          Approval is required before run.
+          Per-job and bulk dry-run / retry failed dry-run / approve / run with
+          status + role gates. Approval is required before run. dry_run_failed
+          jobs are never approved or run.
         </p>
       </div>
       <ErrorBox message={error} />
@@ -277,6 +285,20 @@ export default function PlanDetailPage() {
           <button
             className="btn"
             type="button"
+            data-testid="bulk-retry-dry-run"
+            disabled={
+              bulkBusy ||
+              busyJobId != null ||
+              !canDryRun ||
+              failedDryRunCount === 0
+            }
+            onClick={() => setConfirmKind("retry_dry_run")}
+          >
+            Retry Failed Dry Runs ({failedDryRunCount})
+          </button>
+          <button
+            className="btn"
+            type="button"
             data-testid="bulk-approve"
             disabled={
               bulkBusy ||
@@ -331,6 +353,8 @@ export default function PlanDetailPage() {
                 const busy = busyJobId === j.id || bulkBusy;
                 const showDryRun =
                   canDryRun && j.status === "waiting_dry_run";
+                const showRetryDryRun =
+                  canDryRun && j.status === "dry_run_failed";
                 const showApprove =
                   canApprove && j.status === "dry_run_success";
                 const showReject = canReject && REJECT_STATUSES.has(j.status);
@@ -359,6 +383,17 @@ export default function PlanDetailPage() {
                             onClick={() => void onDryRun(j)}
                           >
                             Dry Run
+                          </button>
+                        ) : null}
+                        {showRetryDryRun ? (
+                          <button
+                            className="btn primary"
+                            type="button"
+                            data-testid={`retry-dry-run-${j.id}`}
+                            disabled={busy}
+                            onClick={() => void onDryRun(j)}
+                          >
+                            Retry Dry Run
                           </button>
                         ) : null}
                         {showApprove ? (
@@ -394,19 +429,13 @@ export default function PlanDetailPage() {
                             Run
                           </button>
                         ) : null}
-                        {showResults ? (
-                          <Link
-                            className="btn"
-                            href={`/jobs/${j.id}`}
-                            data-testid={`results-${j.id}`}
-                          >
-                            Results
-                          </Link>
-                        ) : (
-                          <Link className="btn" href={`/jobs/${j.id}`}>
-                            Results
-                          </Link>
-                        )}
+                        <Link
+                          className="btn"
+                          href={`/jobs/${j.id}`}
+                          data-testid={`results-${j.id}`}
+                        >
+                          Results
+                        </Link>
                       </div>
                     </td>
                   </tr>

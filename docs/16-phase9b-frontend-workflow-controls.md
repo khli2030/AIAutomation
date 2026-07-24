@@ -39,12 +39,15 @@ Created at, and **View Jobs**.
 ### Plan Detail (`/plans/[planId]`)
 
 - Plan summary + job status counts
-- Jobs table with Dry Run / Approve / Reject / Run / Results (status + role gated)
+- Jobs table with Dry Run / **Retry Dry Run** / Approve / Reject / Run / Results
+  (status + role gated)
 - Bulk actions with confirmation modal:
   - Dry Run All Waiting Jobs (`waiting_dry_run` only)
+  - **Retry Failed Dry Runs** (`dry_run_failed` only → `POST …/dry-run`)
   - Approve All Dry Run Success Jobs (`dry_run_success` only)
   - Run All Approved Jobs (`approved` only)
 - Continues after individual failures; shows `completed/total` progress and summary
+- `dry_run_failed` jobs are never approved or run
 
 ### Job Results (`/jobs/[jobId]`)
 

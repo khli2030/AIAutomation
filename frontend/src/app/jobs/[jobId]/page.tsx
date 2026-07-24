@@ -17,30 +17,59 @@ function ResultRow({
   onToggle: () => void;
 }) {
   const failed = r.status.toLowerCase().includes("fail");
+  const dryRunFailed = failed && r.result_type === "dry_run";
   return (
     <>
-      <tr className={failed ? "row-failed" : undefined}>
+      <tr
+        className={failed ? "row-failed" : undefined}
+        data-testid={
+          dryRunFailed ? `failed-dry-run-result-${r.id}` : `result-row-${r.id}`
+        }
+      >
         <td>{r.device_name}</td>
         <td>
           <StatusBadge status={r.status} />
+          {dryRunFailed ? (
+            <span className="badge danger" style={{ marginLeft: "0.35rem" }}>
+              dry_run failed
+            </span>
+          ) : null}
         </td>
         <td>{String(r.changed)}</td>
         <td>{String(r.skipped)}</td>
         <td>{r.return_code ?? "—"}</td>
         <td className="mono">{r.result_type}</td>
         <td>
-          <button className="btn" type="button" onClick={onToggle}>
+          <button
+            className="btn"
+            type="button"
+            data-testid={`expand-result-${r.id}`}
+            onClick={onToggle}
+          >
             {open ? "Hide" : "Expand"} stdout/stderr
           </button>
         </td>
       </tr>
       {open ? (
-        <tr className={failed ? "row-failed" : undefined}>
+        <tr
+          className={failed ? "row-failed" : undefined}
+          data-testid={`result-detail-${r.id}`}
+        >
           <td colSpan={7}>
+            {dryRunFailed ? (
+              <p className="safety-note" style={{ marginTop: 0 }}>
+                Failed dry-run host — inspect stderr before retrying from Plan
+                Detail. This does not approve or run the job.
+              </p>
+            ) : null}
             <h3 style={{ fontSize: "0.8rem" }}>stdout</h3>
-            <div className="pre-block mono">{r.stdout || "(empty)"}</div>
+            <div className="pre-block mono" data-testid={`stdout-${r.id}`}>
+              {r.stdout || "(empty)"}
+            </div>
             <h3 style={{ fontSize: "0.8rem" }}>stderr</h3>
-            <div className="pre-block mono">{r.stderr || "(empty)"}</div>
+            <div className="pre-block mono" data-testid={`stderr-${r.id}`}>
+              {r.stderr || "(empty)"}
+            </div>
           </td>
         </tr>
       ) : null}
@@ -127,6 +156,19 @@ export default function JobResultsPage() {
             <StatusBadge status={job.status} /> · {job.task_code} · targets=
             {job.target_count}
           </p>
+          {job.status === "dry_run_failed" ? (
+            <div className="safety-note" data-testid="dry-run-failed-banner">
+              This job is <code>dry_run_failed</code>. Failed host rows are
+              highlighted below. Use Plan Detail → Retry Dry Run — never Approve
+              or Run until dry_run_success.
+              {job.plan_id ? (
+                <>
+                  {" "}
+                  <Link href={`/plans/${job.plan_id}`}>Open plan #{job.plan_id}</Link>
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
 

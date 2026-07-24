@@ -178,12 +178,16 @@ function jobPayload(j: MockJob, planId: number) {
     criticality: j.criticality,
     ansible_group: j.ansible_group,
     status: j.status,
-    dry_run_status: j.dryRunResults ? "dry_run_success" : null,
+    dry_run_status: j.dryRunResults
+      ? "dry_run_success"
+      : j.status === "dry_run_failed"
+        ? "dry_run_failed"
+        : null,
     approved_by:
       j.status === "approved" || j.status === "success" ? "ui-e2e" : null,
     approved_at:
       j.status === "approved" || j.status === "success" ? now() : null,
-    started_at: j.dryRunResults ? now() : null,
+    started_at: j.dryRunResults || j.status === "dry_run_failed" ? now() : null,
     finished_at: j.runResults ? now() : null,
     target_count: j.target_count,
   };
@@ -210,19 +214,20 @@ function plan(state: MockApiState) {
 }
 
 function dryRunItems(j: MockJob) {
-  if (!j.dryRunResults) return [];
+  if (!j.dryRunResults && j.status !== "dry_run_failed") return [];
+  const failed = j.status === "dry_run_failed";
   return [
     {
       id: 100 + j.id * 10,
       job_id: j.id,
       result_type: "dry_run",
       device_name: "e2e-linux-01",
-      status: "success",
+      status: failed ? "failed" : "success",
       changed: false,
       skipped: false,
-      stdout: "MOCK dry_run ok",
-      stderr: "",
-      return_code: 0,
+      stdout: failed ? "" : "MOCK dry_run ok",
+      stderr: failed ? "MOCK dry_run failed: host unreachable" : "",
+      return_code: failed ? 1 : 0,
       created_at: now(),
     },
     {
@@ -230,12 +235,12 @@ function dryRunItems(j: MockJob) {
       job_id: j.id,
       result_type: "dry_run",
       device_name: "e2e-linux-02",
-      status: j.id === 99 ? "failed" : "success",
+      status: failed ? "failed" : "success",
       changed: false,
       skipped: false,
-      stdout: j.id === 99 ? "" : "MOCK dry_run ok",
-      stderr: j.id === 99 ? "MOCK fail" : "",
-      return_code: j.id === 99 ? 1 : 0,
+      stdout: failed ? "" : "MOCK dry_run ok",
+      stderr: failed ? "MOCK dry_run failed: check mode error" : "",
+      return_code: failed ? 1 : 0,
       created_at: now(),
     },
   ];

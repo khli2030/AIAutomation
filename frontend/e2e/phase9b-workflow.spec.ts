@@ -172,4 +172,98 @@ test.describe("Phase 9B workflow controls", () => {
     await page.getByTestId("filter-result-type").selectOption("dry_run");
     await expect(page.getByText("e2e-linux-01")).toBeVisible();
   });
+
+  test("Retry Dry Run appears for dry_run_failed; Approve/Run hidden", async ({
+    page,
+  }) => {
+    const state = createInitialState({ role: "admin", jobCount: 2 });
+    state.validated = true;
+    state.jobs[0].status = "dry_run_failed";
+    state.jobs[1].status = "dry_run_success";
+    state.jobs[1].dryRunResults = true;
+    await installMockApi(page, state);
+
+    await page.goto("/plans/1");
+    await expect(page.getByTestId("retry-dry-run-1")).toBeVisible();
+    await expect(page.getByTestId("approve-1")).toHaveCount(0);
+    await expect(page.getByTestId("run-1")).toHaveCount(0);
+    await expect(page.getByTestId("dry-run-1")).toHaveCount(0);
+
+    await expect(page.getByTestId("approve-2")).toBeVisible();
+    await expect(page.getByTestId("retry-dry-run-2")).toHaveCount(0);
+  });
+
+  test("Bulk Retry Failed Dry Runs only calls dry_run_failed jobs", async ({
+    page,
+  }) => {
+    const state = createInitialState({ role: "admin", jobCount: 3 });
+    state.validated = true;
+    state.jobs[0].status = "dry_run_failed";
+    state.jobs[1].status = "waiting_dry_run";
+    state.jobs[2].status = "dry_run_success";
+    state.jobs[2].dryRunResults = true;
+    await installMockApi(page, state);
+
+    await page.goto("/plans/1");
+    await expect(page.getByTestId("bulk-retry-dry-run")).toBeEnabled();
+    await page.getByTestId("bulk-retry-dry-run").click();
+    await page.getByRole("button", { name: "Confirm" }).click();
+    await expect(page.getByText(/Bulk retry_dry_run:/)).toBeVisible();
+
+    expect(state.calls.dryRun).toEqual([1]);
+    expect(state.calls.dryRun).not.toContain(2);
+    expect(state.calls.dryRun).not.toContain(3);
+    expect(state.jobs[0].status).toBe("dry_run_success");
+    expect(state.jobs[1].status).toBe("waiting_dry_run");
+    expect(state.jobs[2].status).toBe("dry_run_success");
+  });
+
+  test("Bulk Approve and Bulk Run ignore dry_run_failed jobs", async ({
+    page,
+  }) => {
+    const state = createInitialState({ role: "admin", jobCount: 3 });
+    state.validated = true;
+    state.jobs[0].status = "dry_run_failed";
+    state.jobs[1].status = "dry_run_success";
+    state.jobs[1].dryRunResults = true;
+    state.jobs[2].status = "approved";
+    state.jobs[2].dryRunResults = true;
+    await installMockApi(page, state);
+
+    await page.goto("/plans/1");
+
+    await page.getByTestId("bulk-approve").click();
+    await page.getByRole("button", { name: "Confirm" }).click();
+    await expect(page.getByText(/Bulk approve:/)).toBeVisible();
+    expect(state.calls.approve).toEqual([2]);
+    expect(state.calls.approve).not.toContain(1);
+    expect(state.jobs[0].status).toBe("dry_run_failed");
+    expect(state.jobs[1].status).toBe("approved");
+
+    await page.getByTestId("bulk-run").click();
+    await page.getByRole("button", { name: "Confirm" }).click();
+    await expect(page.getByText(/Bulk run:/)).toBeVisible();
+    // After approve, jobs 1 (still failed) and 2 (now approved) + original approved 3
+    expect(state.calls.run.sort()).toEqual([2, 3]);
+    expect(state.calls.run).not.toContain(1);
+    expect(state.jobs[0].status).toBe("dry_run_failed");
+  });
+
+  test("results page highlights failed dry_run rows with stdout/stderr", async ({
+    page,
+  }) => {
+    const state = createInitialState({ role: "admin", jobCount: 1 });
+    state.validated = true;
+    state.jobs[0].status = "dry_run_failed";
+    await installMockApi(page, state);
+
+    await page.goto("/jobs/1");
+    await expect(page.getByTestId("dry-run-failed-banner")).toBeVisible();
+    await page.getByTestId("filter-result-type").selectOption("dry_run");
+    await page.getByTestId("filter-result-status").selectOption("failed");
+    await expect(page.getByTestId("failed-dry-run-result-110")).toBeVisible();
+    await page.getByTestId("expand-result-110").click();
+    await expect(page.getByTestId("stderr-110")).toContainText("MOCK dry_run failed");
+    await expect(page.getByTestId("stdout-110")).toBeVisible();
+  });
 });

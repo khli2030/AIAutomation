@@ -12,7 +12,7 @@ import {
 } from "@/lib/api";
 import type { ExecutionJob, JobExecutionSummary } from "@/types/api";
 
-export type BulkActionKind = "dry_run" | "approve" | "run";
+export type BulkActionKind = "dry_run" | "retry_dry_run" | "approve" | "run";
 
 export type BulkItemResult = {
   jobId: number;
@@ -37,6 +37,7 @@ export type BulkProgress = {
 };
 
 const DRY_RUN_STATUSES = new Set(["waiting_dry_run"]);
+const RETRY_DRY_RUN_STATUSES = new Set(["dry_run_failed"]);
 const APPROVE_STATUSES = new Set(["dry_run_success"]);
 const RUN_STATUSES = new Set(["approved"]);
 
@@ -46,6 +47,9 @@ export function filterJobsForBulk(
 ): ExecutionJob[] {
   if (kind === "dry_run") {
     return jobs.filter((j) => DRY_RUN_STATUSES.has(j.status));
+  }
+  if (kind === "retry_dry_run") {
+    return jobs.filter((j) => RETRY_DRY_RUN_STATUSES.has(j.status));
   }
   if (kind === "approve") {
     return jobs.filter((j) => APPROVE_STATUSES.has(j.status));
@@ -73,7 +77,8 @@ export async function runBulkJobAction(
       currentJobId: job.id,
     });
     try {
-      if (kind === "dry_run") {
+      if (kind === "dry_run" || kind === "retry_dry_run") {
+        // Same API endpoint; filters keep waiting vs failed sets separate.
         const summary: JobExecutionSummary = await dryRunJob(job.id);
         results.push({
           jobId: job.id,
