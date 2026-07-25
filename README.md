@@ -47,6 +47,8 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
+**Phase 10A available:** Real Ansible pilot preparation (safety-status, allowlists, check-mode real dry-run endpoint; defaults still mock/disabled). See [`docs/18-phase10a-real-ansible-pilot-prep.md`](docs/18-phase10a-real-ansible-pilot-prep.md).
+
 **Phase 9C available:** Execution audit timeline, plan summary, and results CSV export (safety defaults unchanged). See [`docs/17-phase9c-execution-audit-safety.md`](docs/17-phase9c-execution-audit-safety.md).
 
 **Phase 9B available:** Frontend execution workflow controls (validate / plan / bulk dry-run / approve / run / results). See [`docs/16-phase9b-frontend-workflow-controls.md`](docs/16-phase9b-frontend-workflow-controls.md).

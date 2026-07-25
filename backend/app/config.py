@@ -63,6 +63,18 @@ class Settings(BaseSettings):
     # real execution stays blocked unless this is explicitly enabled for lab/test.
     real_ansible_enabled: bool = False
 
+    # Phase 10A pilot gates (safe defaults — no broad real execution).
+    # Check-mode only unless explicitly disabled for a later phase.
+    real_ansible_check_mode_only: bool = True
+    # Comma-separated allowlists; empty means nothing is allowlisted.
+    real_ansible_allowed_hosts: str = ""
+    real_ansible_allowed_task_codes: str = ""
+    # Optional overrides for pilot inventory / SSH identity.
+    real_ansible_inventory_path: str | None = None
+    real_ansible_private_key_path: str | None = None
+    real_ansible_remote_user: str | None = None
+    real_ansible_timeout_seconds: int = 120
+
     # AI Analyzer is interface-only until explicitly configured (mock by default).
     ai_provider: str = "mock"
     ai_enabled: bool = False
@@ -73,6 +85,22 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def real_ansible_allowed_hosts_list(self) -> list[str]:
+        return [
+            h.strip()
+            for h in (self.real_ansible_allowed_hosts or "").split(",")
+            if h.strip()
+        ]
+
+    @property
+    def real_ansible_allowed_task_codes_list(self) -> list[str]:
+        return [
+            t.strip()
+            for t in (self.real_ansible_allowed_task_codes or "").split(",")
+            if t.strip()
+        ]
 
 
 @lru_cache

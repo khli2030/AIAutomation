@@ -8,14 +8,17 @@ import {
   approveJob,
   downloadPlanResultsCsv,
   dryRunJob,
+  getAnsibleSafetyStatus,
   getPlan,
   getPlanAudit,
   getPlanSummary,
   listPlanJobs,
+  realDryRunJob,
   rejectJob,
   runJob,
 } from "@/lib/api";
 import type {
+  AnsibleSafetyStatus,
   ExecutionJob,
   ExecutionPlan,
   PlanAuditEvent,
@@ -69,11 +72,14 @@ export default function PlanDetailPage() {
   const [confirmKind, setConfirmKind] = useState<BulkActionKind | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
+  const [safety, setSafety] = useState<AnsibleSafetyStatus | null>(null);
+  const [realDryRunJobId, setRealDryRunJobId] = useState<number | null>(null);
 
   const canDryRun = Boolean(auth?.can_dry_run);
   const canApprove = Boolean(auth?.can_approve_job);
   const canReject = Boolean(auth?.can_reject_job);
   const canRun = Boolean(auth?.can_run);
+  const realAvailable = Boolean(safety?.real_execution_available);
 
   const statusCounts = useMemo(
     () => summary?.jobs_by_status ?? countByStatus(jobs),
@@ -86,16 +92,18 @@ export default function PlanDetailPage() {
 
   const refresh = useCallback(async () => {
     if (!planId) return;
-    const [p, j, s, a] = await Promise.all([
+    const [p, j, s, a, safetyStatus] = await Promise.all([
       getPlan(planId),
       listPlanJobs(planId),
       getPlanSummary(planId),
       getPlanAudit(planId),
+      getAnsibleSafetyStatus(),
     ]);
     setPlan(p);
     setJobs(j.items);
     setSummary(s);
     setAuditEvents(a.items);
+    setSafety(safetyStatus);
   }, [planId]);
 
   useEffect(() => {
@@ -155,6 +163,16 @@ export default function PlanDetailPage() {
     await withJobBusy(job.id, async () => {
       const summary = await runJob(job.id);
       setMessage(`Run job #${job.id}: ${summary.status}`);
+    });
+  }
+
+  async function executeRealDryRun(jobId: number) {
+    setRealDryRunJobId(null);
+    await withJobBusy(jobId, async () => {
+      const summary = await realDryRunJob(jobId);
+      setMessage(
+        `Real Ansible dry-run (check mode) job #${jobId}: ${summary.status}`,
+      );
     });
   }
 
@@ -326,6 +344,32 @@ export default function PlanDetailPage() {
           </div>
         </div>
       ) : null}
+
+      <div className="panel" data-testid="plan-real-ansible-status">
+        <h2>Real Ansible (Phase 10A)</h2>
+        {!safety ? (
+          <p className="muted">Loading safety status…</p>
+        ) : (
+          <>
+            <p data-testid="plan-real-ansible-badge">
+              {safety.real_execution_available
+                ? "AVAILABLE — check-mode pilot path configured"
+                : "BLOCKED — real Ansible not available"}
+            </p>
+            <ul className="muted" data-testid="plan-real-ansible-reasons">
+              {(safety.reasons || []).slice(0, 6).map((r) => (
+                <li key={r}>{r}</li>
+              ))}
+            </ul>
+            <p className="muted" style={{ marginBottom: 0 }}>
+              <Link href="/safety">Open Safety / Ansible</Link>
+              {" · "}
+              Real dry-run button appears only when available. Apply/run remains
+              blocked by default.
+            </p>
+          </>
+        )}
+      </div>
 
       <div className="panel" data-testid="plan-summary-cards">
         <h2>Execution summary</h2>
@@ -505,6 +549,12 @@ export default function PlanDetailPage() {
                     const showReject =
                       canReject && REJECT_STATUSES.has(j.status);
                     const showRun = canRun && j.status === "approved";
+                    const showRealDryRun =
+                      canDryRun &&
+                      realAvailable &&
+                      (j.status === "waiting_dry_run" ||
+                        j.status === "dry_run_failed" ||
+                        j.status === "dry_run_success");
                     return (
                       <tr key={j.id} data-testid={`plan-job-row-${j.id}`}>
                         <td>{j.id}</td>
@@ -538,6 +588,17 @@ export default function PlanDetailPage() {
                                 onClick={() => void onDryRun(j)}
                               >
                                 Retry Dry Run
+                              </button>
+                            ) : null}
+                            {showRealDryRun ? (
+                              <button
+                                className="btn"
+                                type="button"
+                                data-testid={`real-dry-run-${j.id}`}
+                                disabled={busy}
+                                onClick={() => setRealDryRunJobId(j.id)}
+                              >
+                                Real Ansible Dry Run (Check Mode)
                               </button>
                             ) : null}
                             {showApprove ? (
@@ -672,6 +733,19 @@ export default function PlanDetailPage() {
         onCancel={() => setConfirmKind(null)}
         onConfirm={() => {
           if (confirmKind) void executeBulk(confirmKind);
+        }}
+      />
+
+      <ConfirmModal
+        open={realDryRunJobId != null}
+        title="Real Ansible Dry Run (Check Mode)"
+        body="This runs Ansible in check mode only on allowlisted hosts. No changes are applied. Excel Remediation text and AI suggestions are never executed."
+        confirmLabel="Run check-mode dry-run"
+        danger={false}
+        busy={busyJobId != null}
+        onCancel={() => setRealDryRunJobId(null)}
+        onConfirm={() => {
+          if (realDryRunJobId != null) void executeRealDryRun(realDryRunJobId);
         }}
       />
     </div>

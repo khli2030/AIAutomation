@@ -21,6 +21,7 @@ export type MockJob = {
   status: JobStatus;
   dryRunResults: boolean;
   runResults: boolean;
+  realDryRunResults: boolean;
   task_code: string;
   environment: string;
   criticality: string;
@@ -63,11 +64,20 @@ export type MockApiState = {
   /** Phase 9C execution audit timeline (newest first). */
   auditEvents: MockAuditEvent[];
   nextAuditId: number;
+  /** Phase 10A safety-status overrides for UI tests. */
+  realExecutionAvailable: boolean;
+  realAnsibleEnabled: boolean;
+  checkModeOnly: boolean;
+  allowedHostsCount: number;
+  allowedTaskCodesCount: number;
+  safetyReasons: string[];
+  callsRealDryRun: number[];
 };
 
 export type InstallMockOptions = {
   role?: MockApiState["role"];
   jobCount?: number;
+  realExecutionAvailable?: boolean;
 };
 
 const now = () => new Date().toISOString();
@@ -78,6 +88,7 @@ function makeJobs(count: number): MockJob[] {
     status: "waiting_dry_run" as const,
     dryRunResults: false,
     runResults: false,
+    realDryRunResults: false,
     task_code: "SSH_DISABLE_ROOT_LOGIN",
     environment: "test",
     criticality: "High",
@@ -90,6 +101,7 @@ export function createInitialState(
   options: InstallMockOptions = {},
 ): MockApiState {
   const jobCount = options.jobCount ?? 1;
+  const realAvailable = options.realExecutionAvailable ?? false;
   return {
     batchId: 1,
     planId: 1,
@@ -100,6 +112,23 @@ export function createInitialState(
     calls: { dryRun: [], approve: [], run: [], reject: [] },
     auditEvents: [],
     nextAuditId: 1,
+    realExecutionAvailable: realAvailable,
+    realAnsibleEnabled: realAvailable,
+    checkModeOnly: true,
+    allowedHostsCount: realAvailable ? 1 : 0,
+    allowedTaskCodesCount: realAvailable ? 1 : 0,
+    safetyReasons: realAvailable
+      ? [
+          "Pilot real check-mode path is configured (still allowlist + check-mode gated; apply remains blocked)",
+        ]
+      : [
+          "MOCK_MODE=true (safe default)",
+          "REAL_ANSIBLE_ENABLED=false (safe default)",
+          "REAL_ANSIBLE_CHECK_MODE_ONLY=true — apply/run remains blocked",
+          "No hosts in REAL_ANSIBLE_ALLOWED_HOSTS",
+          "No task codes in REAL_ANSIBLE_ALLOWED_TASK_CODES",
+        ],
+    callsRealDryRun: [],
   };
 }
 
@@ -406,6 +435,38 @@ function runItems(j: MockJob) {
   ];
 }
 
+function realDryRunItems(j: MockJob) {
+  if (!j.realDryRunResults) return [];
+  return [
+    {
+      id: 300 + j.id * 10,
+      job_id: j.id,
+      result_type: "real_dry_run",
+      device_name: "e2e-linux-01",
+      status: "success",
+      changed: false,
+      skipped: false,
+      stdout: "REAL check-mode ok",
+      stderr: "",
+      return_code: 0,
+      created_at: now(),
+    },
+    {
+      id: 301 + j.id * 10,
+      job_id: j.id,
+      result_type: "real_dry_run",
+      device_name: "e2e-linux-02",
+      status: "success",
+      changed: false,
+      skipped: false,
+      stdout: "REAL check-mode ok",
+      stderr: "",
+      return_code: 0,
+      created_at: now(),
+    },
+  ];
+}
+
 function findJob(state: MockApiState, jobId: number): MockJob | undefined {
   return state.jobs.find((j) => j.id === jobId);
 }
@@ -436,10 +497,67 @@ export async function installMockApi(
         app: "compliance-remediation-platform",
         env: "test",
         docs: "/docs",
-        phase: "9C",
+        phase: "10A",
         auth: "role token required",
         mock_mode: "true",
         role: state.role,
+      });
+    }
+
+    if (method === "GET" && path === "/ansible/safety-status") {
+      return json(route, 200, {
+        mock_mode: true,
+        real_ansible_enabled: state.realAnsibleEnabled,
+        check_mode_only: state.checkModeOnly,
+        allowed_hosts_count: state.allowedHostsCount,
+        allowed_task_codes_count: state.allowedTaskCodesCount,
+        inventory_configured: state.realExecutionAvailable,
+        private_key_configured: false,
+        remote_user_configured: false,
+        real_execution_available: state.realExecutionAvailable,
+        reasons: state.safetyReasons,
+        allowed_hosts: state.realExecutionAvailable ? ["e2e-linux-01"] : [],
+        allowed_task_codes: state.realExecutionAvailable
+          ? ["SSH_DISABLE_ROOT_LOGIN"]
+          : [],
+        timeout_seconds: 120,
+      });
+    }
+
+    if (method === "POST" && path === "/ansible/connectivity-check") {
+      const body = req.postDataJSON() as { hosts?: string[] };
+      const hosts = body?.hosts || [];
+      if (!state.realAnsibleEnabled) {
+        pushAudit(state, {
+          action: "connectivity_check",
+          event: "real_execution_blocked",
+          job_id: 0,
+          task_code: "",
+          old_status: null,
+          new_status: null,
+        });
+        return json(route, 200, {
+          ok: false,
+          blocked: true,
+          hosts,
+          blocked_hosts: hosts,
+          reasons: ["REAL_ANSIBLE_ENABLED=false"],
+          stdout: "",
+          stderr: "REAL_ANSIBLE_ENABLED=false",
+          mock_mode: true,
+          real_ansible_enabled: false,
+        });
+      }
+      return json(route, 200, {
+        ok: true,
+        blocked: false,
+        hosts,
+        reasons: [],
+        stdout: "pong",
+        stderr: "",
+        mock_mode: false,
+        real_ansible_enabled: true,
+        module: "ping",
       });
     }
 
@@ -541,6 +659,7 @@ export async function installMockApi(
         j.status = "waiting_dry_run";
         j.dryRunResults = false;
         j.runResults = false;
+        j.realDryRunResults = false;
       }
       return json(route, 200, {
         plan: plan(state),
@@ -773,10 +892,69 @@ export async function installMockApi(
         });
       }
 
+      if (method === "POST" && path === `/execution-jobs/${jobId}/real-dry-run`) {
+        state.callsRealDryRun.push(jobId);
+        if (!state.realExecutionAvailable) {
+          pushAudit(state, {
+            action: "real_dry_run",
+            event: "real_execution_blocked",
+            job_id: jobId,
+            task_code: j.task_code,
+            old_status: j.status,
+            new_status: j.status,
+          });
+          return json(route, 400, {
+            detail: "REAL_ANSIBLE_ENABLED=false",
+          });
+        }
+        const oldStatus = j.status;
+        pushAudit(state, {
+          action: "real_dry_run",
+          event: "real_dry_run_started",
+          job_id: jobId,
+          task_code: j.task_code,
+          old_status: oldStatus,
+          new_status: "dry_run_running",
+        });
+        j.status = "dry_run_success";
+        j.realDryRunResults = true;
+        pushAudit(state, {
+          action: "real_dry_run",
+          event: "real_dry_run_completed",
+          job_id: jobId,
+          task_code: j.task_code,
+          old_status: oldStatus,
+          new_status: "dry_run_success",
+          hosts_total: 2,
+          hosts_success: 2,
+          hosts_failed: 0,
+          hosts_changed: 0,
+          hosts_skipped: 0,
+        });
+        return json(route, 200, {
+          job_id: jobId,
+          mode: "dry_run",
+          mock_mode: false,
+          status: "dry_run_success",
+          dry_run_status: "dry_run_success",
+          hosts_total: 2,
+          hosts_success: 2,
+          hosts_failed: 0,
+          hosts_changed: 0,
+          hosts_skipped: 0,
+          message: "Real Ansible check-mode dry-run completed",
+        });
+      }
+
       if (method === "GET" && path === `/execution-jobs/${jobId}/results`) {
         const rt = url.searchParams.get("result_type");
-        let items = [...dryRunItems(j), ...runItems(j)];
+        let items = [
+          ...dryRunItems(j),
+          ...realDryRunItems(j),
+          ...runItems(j),
+        ];
         if (rt === "dry_run") items = dryRunItems(j);
+        if (rt === "real_dry_run") items = realDryRunItems(j);
         if (rt === "run") items = runItems(j);
         return json(route, 200, {
           job_id: jobId,

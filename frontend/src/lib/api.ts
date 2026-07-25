@@ -8,6 +8,7 @@
 
 import type {
   AISuggestion,
+  AnsibleSafetyStatus,
   DashboardSummary,
   ExecutionJob,
   ExecutionPlan,
@@ -310,6 +311,33 @@ export async function getJob(jobId: number): Promise<ExecutionJob> {
 
 export async function dryRunJob(jobId: number): Promise<JobExecutionSummary> {
   return apiFetch(`/execution-jobs/${jobId}/dry-run`, { method: "POST" });
+}
+
+export async function realDryRunJob(
+  jobId: number,
+): Promise<JobExecutionSummary> {
+  return apiFetch(`/execution-jobs/${jobId}/real-dry-run`, { method: "POST" });
+}
+
+export async function getAnsibleSafetyStatus(): Promise<AnsibleSafetyStatus> {
+  return apiFetch("/ansible/safety-status");
+}
+
+export async function postConnectivityCheck(
+  hosts: string[],
+): Promise<{
+  ok: boolean;
+  blocked: boolean;
+  hosts: string[];
+  blocked_hosts?: string[];
+  reasons: string[];
+  stdout: string;
+  stderr: string;
+}> {
+  return apiFetch("/ansible/connectivity-check", {
+    method: "POST",
+    body: JSON.stringify({ hosts }),
+  });
 }
 
 export async function approveJob(

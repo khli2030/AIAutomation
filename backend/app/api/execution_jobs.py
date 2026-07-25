@@ -25,6 +25,7 @@ from app.schemas.plans import (
     JobResultsListResponse,
     JobReviewRequest,
 )
+from app.config import Settings, get_settings
 from app.services.ansible_execution import (
     AnsibleExecutionError,
     AnsibleExecutionService,
@@ -32,6 +33,10 @@ from app.services.ansible_execution import (
 )
 from app.services.job_approval import JobApprovalError, JobApprovalService
 from app.services.plan_query import PlanQueryService
+from app.services.real_ansible_pilot import (
+    RealAnsiblePilotError,
+    RealAnsiblePilotService,
+)
 
 router = APIRouter()
 
@@ -207,26 +212,73 @@ def run_job(
     return _summary_response(summary)
 
 
+@router.post("/{job_id}/real-dry-run", response_model=JobExecutionSummaryResponse)
+def real_dry_run_job(
+    job_id: int,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    auth: AuthContext = require_roles(*OPERATOR_ROLES),
+) -> JobExecutionSummaryResponse:
+    """Phase 10A allowlisted real Ansible check-mode dry-run.
+
+    Blocked by default (MOCK_MODE / REAL_ANSIBLE_ENABLED / empty allowlists).
+    Never applies changes. Never uses Excel Remediation or AI drafts.
+    """
+    try:
+        result = RealAnsiblePilotService(db, settings=settings).real_dry_run(
+            job_id, actor=auth.actor, role=auth.role.value
+        )
+    except RealAnsiblePilotError as exc:
+        detail = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if getattr(exc, "code", "") == "not_found"
+            or "not found" in detail.lower()
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(status_code=code, detail=detail) from exc
+    return JobExecutionSummaryResponse(
+        job_id=int(result["job_id"]),
+        mode="dry_run",
+        mock_mode=bool(result.get("mock_mode", False)),
+        status=str(result.get("status") or ""),
+        dry_run_status=result.get("dry_run_status"),
+        hosts_total=int(result.get("hosts_total") or 0),
+        hosts_success=int(result.get("hosts_success") or 0),
+        hosts_failed=int(result.get("hosts_failed") or 0),
+        hosts_changed=int(result.get("hosts_changed") or 0),
+        hosts_skipped=int(result.get("hosts_skipped") or 0),
+        message=str(result.get("message") or ""),
+    )
+
+
 @router.get("/{job_id}/results", response_model=JobResultsListResponse)
 def get_job_results(
     job_id: int,
     result_type: str | None = Query(
         default=None,
-        description="Filter by result_type: dry_run or run. Omit to return both.",
+        description=(
+            "Filter by result_type: dry_run, run, or real_dry_run. "
+            "Omit to return all."
+        ),
     ),
     db: Session = Depends(get_db),
     auth: AuthContext = require_roles(*READ_ROLES),
 ) -> JobResultsListResponse:
     """GET /execution-jobs/{job_id}/results — per-host mock/real results.
 
-    Use ?result_type=dry_run or ?result_type=run to separate dry-run vs apply results.
+    Use ?result_type=dry_run, run, or real_dry_run to filter.
     """
     job = db.get(ExecutionJob, job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Execution job not found")
 
     if result_type is not None:
-        allowed = {JobResultType.DRY_RUN.value, JobResultType.RUN.value}
+        allowed = {
+            JobResultType.DRY_RUN.value,
+            JobResultType.RUN.value,
+            JobResultType.REAL_DRY_RUN.value,
+        }
         if result_type not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

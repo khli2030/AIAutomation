@@ -130,6 +130,22 @@ export type PlanExecutionSummary = {
   real_ansible_enabled: boolean;
 };
 
+export type AnsibleSafetyStatus = {
+  mock_mode: boolean;
+  real_ansible_enabled: boolean;
+  check_mode_only: boolean;
+  allowed_hosts_count: number;
+  allowed_task_codes_count: number;
+  inventory_configured: boolean;
+  private_key_configured: boolean;
+  remote_user_configured: boolean;
+  real_execution_available: boolean;
+  reasons: string[];
+  allowed_hosts?: string[];
+  allowed_task_codes?: string[];
+  timeout_seconds?: number;
+};
+
 export type JobExecutionSummary = {
   job_id: number;
   mode: string;

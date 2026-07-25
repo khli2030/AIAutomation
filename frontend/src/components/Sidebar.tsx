@@ -14,6 +14,7 @@ const LINKS = [
   { href: "/plans", label: "Execution Plans" },
   { href: "/approvals", label: "Job Approval" },
   { href: "/jobs", label: "Job Results" },
+  { href: "/safety", label: "Safety / Ansible" },
   { href: "/settings", label: "Settings / Login" },
 ];
 
@@ -24,7 +25,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="brand">
         Compliance Remediation
-        <span>Internal operator console · Phase 9B</span>
+        <span>Internal operator console · Phase 10A</span>
       </div>
       <nav className="nav" aria-label="Primary">
         {LINKS.map((link) => {
