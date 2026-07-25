@@ -512,8 +512,8 @@ export async function installMockApi(
         allowed_hosts_count: state.allowedHostsCount,
         allowed_task_codes_count: state.allowedTaskCodesCount,
         inventory_configured: state.realExecutionAvailable,
-        private_key_configured: false,
-        remote_user_configured: false,
+        private_key_configured: state.realExecutionAvailable,
+        remote_user_configured: state.realExecutionAvailable,
         real_execution_available: state.realExecutionAvailable,
         reasons: state.safetyReasons,
         allowed_hosts: state.realExecutionAvailable ? ["e2e-linux-01"] : [],
@@ -521,6 +521,27 @@ export async function installMockApi(
           ? ["SSH_DISABLE_ROOT_LOGIN"]
           : [],
         timeout_seconds: 120,
+      });
+    }
+
+    if (method === "GET" && path === "/ansible/lab-config-preview") {
+      return json(route, 200, {
+        allowed_hosts: state.realExecutionAvailable ? ["e2e-linux-01"] : [],
+        allowed_task_codes: state.realExecutionAvailable
+          ? ["SSH_DISABLE_ROOT_LOGIN"]
+          : [],
+        inventory_path_configured: state.realExecutionAvailable,
+        private_key_configured: state.realExecutionAvailable,
+        remote_user_configured: state.realExecutionAvailable,
+        timeout_seconds: 120,
+        validation_status: state.realExecutionAvailable ? "ok" : "blocked",
+        validation_errors: state.realExecutionAvailable
+          ? []
+          : state.safetyReasons,
+        mock_mode: true,
+        real_ansible_enabled: state.realAnsibleEnabled,
+        check_mode_only: state.checkModeOnly,
+        connectivity_allowed: state.realExecutionAvailable,
       });
     }
 

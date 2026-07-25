@@ -47,6 +47,8 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
+**Phase 10B available:** Lab inventory + controlled connectivity pilot (lab-config-preview, stricter allowlist/inventory/key validation; defaults still mock/disabled). See [`docs/real-ansible-lab-pilot.md`](docs/real-ansible-lab-pilot.md).
+
 **Phase 10A available:** Real Ansible pilot preparation (safety-status, allowlists, check-mode real dry-run endpoint; defaults still mock/disabled). See [`docs/18-phase10a-real-ansible-pilot-prep.md`](docs/18-phase10a-real-ansible-pilot-prep.md).
 
 **Phase 9C available:** Execution audit timeline, plan summary, and results CSV export (safety defaults unchanged). See [`docs/17-phase9c-execution-audit-safety.md`](docs/17-phase9c-execution-audit-safety.md).

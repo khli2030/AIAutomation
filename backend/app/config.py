@@ -5,7 +5,15 @@ Never hardcode credentials. Copy `.env.example` to `.env` for local/MVP use.
 
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.services.ansible_env_parse import (
+    TIMEOUT_DEFAULT_SECONDS,
+    TIMEOUT_MAX_SECONDS,
+    TIMEOUT_MIN_SECONDS,
+    parse_csv_allowlist,
+)
 
 
 class Settings(BaseSettings):
@@ -63,17 +71,19 @@ class Settings(BaseSettings):
     # real execution stays blocked unless this is explicitly enabled for lab/test.
     real_ansible_enabled: bool = False
 
-    # Phase 10A pilot gates (safe defaults — no broad real execution).
+    # Phase 10A/10B pilot gates (safe defaults — no broad real execution).
     # Check-mode only unless explicitly disabled for a later phase.
     real_ansible_check_mode_only: bool = True
     # Comma-separated allowlists; empty means nothing is allowlisted.
+    # Example: REAL_ANSIBLE_ALLOWED_HOSTS=lab-server-01,10.10.10.15
     real_ansible_allowed_hosts: str = ""
+    # Example: REAL_ANSIBLE_ALLOWED_TASK_CODES=AIDE_INSTALL,SSH_MAX_AUTH_TRIES
     real_ansible_allowed_task_codes: str = ""
-    # Optional overrides for pilot inventory / SSH identity.
+    # Lab pilot inventory / SSH identity (required when REAL_ANSIBLE_ENABLED=true).
     real_ansible_inventory_path: str | None = None
     real_ansible_private_key_path: str | None = None
     real_ansible_remote_user: str | None = None
-    real_ansible_timeout_seconds: int = 120
+    real_ansible_timeout_seconds: int = TIMEOUT_DEFAULT_SECONDS
 
     # AI Analyzer is interface-only until explicitly configured (mock by default).
     ai_provider: str = "mock"
@@ -82,25 +92,44 @@ class Settings(BaseSettings):
     ai_base_url: str | None = None
     ai_model: str | None = None
 
+    @field_validator("real_ansible_timeout_seconds", mode="before")
+    @classmethod
+    def _validate_timeout_bounds(cls, value: object) -> int:
+        """Clamp timeout into safe min/max; invalid values fall back to default."""
+        try:
+            n = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return TIMEOUT_DEFAULT_SECONDS
+        if n < TIMEOUT_MIN_SECONDS:
+            return TIMEOUT_MIN_SECONDS
+        if n > TIMEOUT_MAX_SECONDS:
+            return TIMEOUT_MAX_SECONDS
+        return n
+
+    @field_validator(
+        "real_ansible_inventory_path",
+        "real_ansible_private_key_path",
+        "real_ansible_remote_user",
+        mode="before",
+    )
+    @classmethod
+    def _strip_optional_str(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
 
     @property
     def real_ansible_allowed_hosts_list(self) -> list[str]:
-        return [
-            h.strip()
-            for h in (self.real_ansible_allowed_hosts or "").split(",")
-            if h.strip()
-        ]
+        return parse_csv_allowlist(self.real_ansible_allowed_hosts)
 
     @property
     def real_ansible_allowed_task_codes_list(self) -> list[str]:
-        return [
-            t.strip()
-            for t in (self.real_ansible_allowed_task_codes or "").split(",")
-            if t.strip()
-        ]
+        return parse_csv_allowlist(self.real_ansible_allowed_task_codes)
 
 
 @lru_cache
