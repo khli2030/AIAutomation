@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ApiError,
   generatePlan,
   getImport,
   listImports,
+  listRecords,
   validateBatch,
 } from "@/lib/api";
 import type { ImportBatch, ValidationSummary } from "@/types/api";
@@ -24,14 +25,45 @@ function ImportsInner() {
   const [selectedId, setSelectedId] = useState<string>(initialId || "");
   const [batch, setBatch] = useState<ImportBatch | null>(null);
   const [validation, setValidation] = useState<ValidationSummary | null>(null);
+  const [readyForPlan, setReadyForPlan] = useState(0);
+  const [hasUnknownRecords, setHasUnknownRecords] = useState(false);
   const [planId, setPlanId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
+  const canValidateBatch = useMemo(() => {
+    if (!canValidate || !batch) return false;
+    // Allow when parsed, or when records still have null/unknown validation_status.
+    return batch.status === "parsed" || hasUnknownRecords;
+  }, [canValidate, batch, hasUnknownRecords]);
+
   const canGeneratePlan = useMemo(() => {
-    return Boolean(canPlan && validation && validation.ready_for_plan > 0);
-  }, [canPlan, validation]);
+    const ready = validation?.ready_for_plan ?? readyForPlan;
+    return Boolean(canPlan && ready > 0);
+  }, [canPlan, validation, readyForPlan]);
+
+  const refreshRecordHints = useCallback(async (batchId: number) => {
+    const [ready, unknown] = await Promise.all([
+      listRecords(batchId, {
+        limit: 1,
+        offset: 0,
+        validation_status: "READY_FOR_PLAN",
+      }),
+      listRecords(batchId, { limit: 50, offset: 0 }),
+    ]);
+    setReadyForPlan(ready.total);
+    const unknownCount = unknown.items.filter(
+      (r) => !r.validation_status || r.validation_status === "UNKNOWN",
+    ).length;
+    // Also treat empty validation across the batch sample as unknown when total>0
+    // and no READY/NEEDS yet (pre-validate).
+    setHasUnknownRecords(
+      unknownCount > 0 ||
+        (unknown.total > 0 &&
+          unknown.items.every((r) => !r.validation_status)),
+    );
+  }, []);
 
   async function refreshList() {
     const res = await listImports(100, 0);
@@ -44,6 +76,7 @@ function ImportsInner() {
   async function loadBatch(id: number) {
     const b = await getImport(id);
     setBatch(b);
+    await refreshRecordHints(id);
   }
 
   useEffect(() => {
@@ -81,7 +114,26 @@ function ImportsInner() {
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
+
+  async function onRefresh() {
+    if (!batch) {
+      await refreshList();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await refreshList();
+      await loadBatch(batch.id);
+      setMessage(`Refreshed batch #${batch.id}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onValidate() {
     if (!batch) return;
@@ -91,6 +143,8 @@ function ImportsInner() {
     try {
       const summary = await validateBatch(batch.id);
       setValidation(summary);
+      setReadyForPlan(summary.ready_for_plan);
+      setHasUnknownRecords(false);
       setMessage(
         `Validated: ${summary.ready_for_plan} READY_FOR_PLAN, ${summary.needs_review} NEEDS_REVIEW`,
       );
@@ -125,8 +179,8 @@ function ImportsInner() {
       <div className="page-header">
         <h1>Import Summary</h1>
         <p>
-          Batch details, validation, and plan generation. Validate before
-          generating a plan.
+          Validate Batch and Generate Plan from the UI. Operator/admin only.
+          Refresh reloads batch + READY_FOR_PLAN hints.
         </p>
       </div>
       <ErrorBox message={error} />
@@ -143,6 +197,8 @@ function ImportsInner() {
                 setSelectedId(e.target.value);
                 setValidation(null);
                 setPlanId(null);
+                setReadyForPlan(0);
+                setHasUnknownRecords(false);
               }}
             >
               <option value="">—</option>
@@ -154,8 +210,13 @@ function ImportsInner() {
             </select>
           </div>
         </div>
-        <button className="btn" type="button" onClick={() => void refreshList()}>
-          Refresh list
+        <button
+          className="btn"
+          type="button"
+          disabled={busy}
+          onClick={() => void onRefresh()}
+        >
+          Refresh
         </button>
       </div>
 
@@ -178,8 +239,10 @@ function ImportsInner() {
               <div className="value">{batch.valid_records}</div>
             </div>
             <div className="stat">
-              <div className="label">invalid_records</div>
-              <div className="value">{batch.invalid_records}</div>
+              <div className="label">READY_FOR_PLAN</div>
+              <div className="value">
+                {validation?.ready_for_plan ?? readyForPlan}
+              </div>
             </div>
           </div>
           {batch.error_message ? (
@@ -195,7 +258,8 @@ function ImportsInner() {
             <button
               className="btn primary"
               type="button"
-              disabled={busy || !canValidate || batch.status !== "parsed"}
+              data-testid="validate-batch"
+              disabled={busy || !canValidateBatch}
               onClick={() => void onValidate()}
               title={
                 canValidate
@@ -203,20 +267,30 @@ function ImportsInner() {
                   : "Requires operator or admin"
               }
             >
-              Validate batch
+              Validate Batch
             </button>
             <button
               className="btn"
               type="button"
+              data-testid="generate-plan"
               disabled={busy || !canGeneratePlan}
               onClick={() => void onGeneratePlan()}
               title={
                 canPlan
-                  ? "Generate plan"
+                  ? "Generate plan when READY_FOR_PLAN > 0"
                   : "Requires operator or admin"
               }
             >
-              Generate plan
+              Generate Plan
+            </button>
+            <button
+              className="btn"
+              type="button"
+              data-testid="refresh-batch"
+              disabled={busy}
+              onClick={() => void onRefresh()}
+            >
+              Refresh
             </button>
             <Link className="btn" href={`/records?batchId=${batch.id}`}>
               Records

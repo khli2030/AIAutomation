@@ -91,6 +91,7 @@ export default function DashboardPage() {
                       <th>File</th>
                       <th>Status</th>
                       <th>Records</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -104,6 +105,14 @@ export default function DashboardPage() {
                           <StatusBadge status={b.status} />
                         </td>
                         <td>{b.total_records}</td>
+                        <td>
+                          <Link
+                            className="btn"
+                            href={`/imports?batchId=${b.id}`}
+                          >
+                            Validate / Plan
+                          </Link>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -120,6 +129,7 @@ export default function DashboardPage() {
                       <th>Task</th>
                       <th>Status</th>
                       <th>Targets</th>
+                      <th></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -133,6 +143,14 @@ export default function DashboardPage() {
                           <StatusBadge status={j.status} />
                         </td>
                         <td>{j.target_count}</td>
+                        <td>
+                          <Link className="btn" href={`/plans/${j.plan_id}`}>
+                            Plan
+                          </Link>{" "}
+                          <Link className="btn" href={`/jobs/${j.id}`}>
+                            Results
+                          </Link>
+                        </td>
                       </tr>
                     ))}
                   </tbody>

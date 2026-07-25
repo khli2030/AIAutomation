@@ -77,9 +77,9 @@ test.describe("Phase 7.5 UI E2E mock workflow", () => {
     await page.goto("/");
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible();
     await expect(page.locator(".mock-banner")).toBeVisible();
-    await expect(page.locator(".mock-banner .tag")).toHaveText("MOCK_MODE");
+    await expect(page.locator(".mock-banner .tag")).toHaveText("MOCK MODE");
     await expect(page.locator(".mock-banner")).toContainText(
-      "no ansible-runner",
+      "no SSH or Ansible execution is performed",
     );
 
     // 3. Upload sample Excel
@@ -102,12 +102,13 @@ test.describe("Phase 7.5 UI E2E mock workflow", () => {
     ).toBeVisible();
     await page.locator("#batch").selectOption("1");
     await expect(page.getByRole("heading", { name: /Batch #1/ })).toBeVisible();
-    await page.getByRole("button", { name: "Validate batch" }).click();
+    await page.getByRole("button", { name: "Validate Batch" }).click();
     await expect(
       page.getByText("Validated: 2 READY_FOR_PLAN, 0 NEEDS_REVIEW"),
     ).toBeVisible();
-    await expect(page.locator(".stat .label", { hasText: "ready_for_plan" })).toBeVisible();
-    await expect(page.locator(".stat").filter({ hasText: "ready_for_plan" }).locator(".value")).toHaveText("2");
+    await expect(
+      page.locator(".stat").filter({ has: page.locator(".label", { hasText: /^ready_for_plan$/ }) }).locator(".value"),
+    ).toHaveText("2");
 
     // 6–7. Records Review — READY_FOR_PLAN
     await page.getByRole("link", { name: "Records Review" }).click();
@@ -133,19 +134,20 @@ test.describe("Phase 7.5 UI E2E mock workflow", () => {
     await page.getByRole("link", { name: "Import Summary" }).click();
     await page.locator("#batch").selectOption("1");
     // Re-validate so Generate plan enables (page remount may clear local validation)
-    await page.getByRole("button", { name: "Validate batch" }).click();
-    await expect(page.getByRole("button", { name: "Generate plan" })).toBeEnabled({
+    await page.getByRole("button", { name: "Validate Batch" }).click();
+    await expect(page.getByRole("button", { name: "Generate Plan" })).toBeEnabled({
       timeout: 10_000,
     });
-    await page.getByRole("button", { name: "Generate plan" }).click();
+    await page.getByRole("button", { name: "Generate Plan" }).click();
     await expect(page.getByText(/Plan #1 created/)).toBeVisible();
 
-    // 9. Execution Plans — list plan + jobs
+    // 9. Execution Plans — list plan + View Jobs
     await page.getByRole("link", { name: "Execution Plans" }).click();
     await expect(
       page.getByRole("heading", { name: "Execution Plans" }),
     ).toBeVisible();
-    await page.locator("table.data tbody tr").first().click();
+    await page.getByTestId("view-jobs-1").click();
+    await expect(page.getByRole("heading", { name: "Plan #1" })).toBeVisible();
     await expect(page.getByText("SSH_DISABLE_ROOT_LOGIN")).toBeVisible();
     await expect(
       page.locator("table.data .badge", { hasText: "waiting_dry_run" }),
@@ -195,15 +197,15 @@ test.describe("Phase 7.5 UI E2E mock workflow", () => {
     await runBtn.click();
     await expect(page.getByText(/Mock run complete/)).toBeVisible();
 
-    // 15–16. Job results page — run vs dry_run + final status
+    // 15–16. Job results page — filters + final status
     await page.getByRole("link", { name: "View all results" }).click();
     await expect(page.getByRole("heading", { name: /Job #1 results/ })).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: /Dry-run results \(result_type=dry_run\)/ }),
-    ).toBeVisible();
-    await expect(
-      page.getByRole("heading", { name: /Run results \(result_type=run\)/ }),
-    ).toBeVisible();
+    await expect(page.getByTestId("filter-result-type")).toBeVisible();
+    await page.getByTestId("filter-result-type").selectOption("dry_run");
+    await expect(page.getByText("dry_run").first()).toBeVisible();
+    await page.getByTestId("filter-result-type").selectOption("run");
+    await expect(page.getByText("run").first()).toBeVisible();
+    await page.getByTestId("filter-result-type").selectOption("all");
     await expect(page.locator("body")).toContainText("success");
     // Both result types present in tables
     await expect(page.getByText("dry_run").first()).toBeVisible();
