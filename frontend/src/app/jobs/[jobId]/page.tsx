@@ -88,9 +88,9 @@ export default function JobResultsPage() {
   const [job, setJob] = useState<ExecutionJob | null>(null);
   const [allResults, setAllResults] = useState<JobResult[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [resultType, setResultType] = useState<"all" | "dry_run" | "run">(
-    "all",
-  );
+  const [resultType, setResultType] = useState<
+    "all" | "dry_run" | "run" | "real_dry_run"
+  >("all");
   const [statusFilter, setStatusFilter] = useState<
     "all" | "success" | "skipped" | "failed"
   >("all");
@@ -229,11 +229,14 @@ export default function JobResultsPage() {
               data-testid="filter-result-type"
               value={resultType}
               onChange={(e) =>
-                setResultType(e.target.value as "all" | "dry_run" | "run")
+                setResultType(
+                  e.target.value as "all" | "dry_run" | "run" | "real_dry_run",
+                )
               }
             >
               <option value="all">all</option>
               <option value="dry_run">dry_run</option>
+              <option value="real_dry_run">real_dry_run</option>
               <option value="run">run</option>
             </select>
           </div>

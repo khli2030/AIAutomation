@@ -37,6 +37,11 @@ PHASE9C_EVENTS: frozenset[str] = frozenset(
         "real_dry_run_completed",
         "real_dry_run_failed",
         "real_dry_run_blocked",
+        # Phase 10A pilot events.
+        "real_connectivity_check_started",
+        "real_connectivity_check_completed",
+        "real_connectivity_check_failed",
+        "real_execution_blocked",
     }
 )
 
