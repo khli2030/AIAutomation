@@ -1,5 +1,5 @@
 /**
- * Stateful FastAPI mock for Phase 7.5 / 9B Playwright UI E2E.
+ * Stateful FastAPI mock for Phase 7.5 / 9B / 9C Playwright UI E2E.
  * Simulates MOCK_MODE backend responses only — never Ansible/SSH/subprocess.
  */
 
@@ -28,6 +28,28 @@ export type MockJob = {
   target_count: number;
 };
 
+export type MockAuditEvent = {
+  id: number;
+  created_at: string;
+  actor: string;
+  role: string;
+  action: string;
+  event: string;
+  plan_id: number;
+  job_id: number;
+  batch_id: number;
+  task_code: string;
+  old_status: string | null;
+  new_status: string | null;
+  mock_mode: boolean;
+  real_ansible_enabled: boolean;
+  hosts_total: number | null;
+  hosts_success: number | null;
+  hosts_failed: number | null;
+  hosts_skipped: number | null;
+  hosts_changed: number | null;
+};
+
 export type MockApiState = {
   batchId: number;
   planId: number;
@@ -38,6 +60,9 @@ export type MockApiState = {
   role: "viewer" | "operator" | "approver" | "admin";
   /** Track dry-run/approve/run POST calls for assertions. */
   calls: { dryRun: number[]; approve: number[]; run: number[]; reject: number[] };
+  /** Phase 9C execution audit timeline (newest first). */
+  auditEvents: MockAuditEvent[];
+  nextAuditId: number;
 };
 
 export type InstallMockOptions = {
@@ -73,7 +98,110 @@ export function createInitialState(
     jobs: makeJobs(jobCount),
     role: options.role ?? "admin",
     calls: { dryRun: [], approve: [], run: [], reject: [] },
+    auditEvents: [],
+    nextAuditId: 1,
   };
+}
+
+function pushAudit(
+  state: MockApiState,
+  partial: Omit<MockAuditEvent, "id" | "created_at" | "plan_id" | "batch_id" | "mock_mode" | "real_ansible_enabled" | "actor" | "role"> &
+    Partial<Pick<MockAuditEvent, "actor" | "role" | "hosts_total" | "hosts_success" | "hosts_failed" | "hosts_skipped" | "hosts_changed">>,
+) {
+  const event: MockAuditEvent = {
+    id: state.nextAuditId++,
+    created_at: now(),
+    actor: partial.actor ?? `ui-e2e-${state.role}`,
+    role: partial.role ?? state.role,
+    action: partial.action,
+    event: partial.event,
+    plan_id: state.planId,
+    job_id: partial.job_id,
+    batch_id: state.batchId,
+    task_code: partial.task_code,
+    old_status: partial.old_status,
+    new_status: partial.new_status,
+    mock_mode: true,
+    real_ansible_enabled: false,
+    hosts_total: partial.hosts_total ?? null,
+    hosts_success: partial.hosts_success ?? null,
+    hosts_failed: partial.hosts_failed ?? null,
+    hosts_skipped: partial.hosts_skipped ?? null,
+    hosts_changed: partial.hosts_changed ?? null,
+  };
+  state.auditEvents.unshift(event);
+}
+
+function planSummary(state: MockApiState) {
+  const jobs_by_status: Record<string, number> = {};
+  for (const j of state.jobs) {
+    jobs_by_status[j.status] = (jobs_by_status[j.status] || 0) + 1;
+  }
+  const dry_run_results_by_status: Record<string, number> = {};
+  const run_results_by_status: Record<string, number> = {};
+  const failed_task_codes = new Set<string>();
+  for (const j of state.jobs) {
+    for (const r of dryRunItems(j)) {
+      dry_run_results_by_status[r.status] =
+        (dry_run_results_by_status[r.status] || 0) + 1;
+      if (String(r.status).includes("fail")) failed_task_codes.add(j.task_code);
+    }
+    for (const r of runItems(j)) {
+      run_results_by_status[r.status] =
+        (run_results_by_status[r.status] || 0) + 1;
+    }
+  }
+  return {
+    plan_id: state.planId,
+    batch_id: state.batchId,
+    total_jobs: state.jobs.length,
+    jobs_by_status,
+    total_targets: state.jobs.reduce((n, j) => n + j.target_count, 0),
+    dry_run_results_by_status,
+    run_results_by_status,
+    failed_task_codes: [...failed_task_codes],
+    skipped_task_codes: [],
+    mock_mode: true,
+    real_ansible_enabled: false,
+  };
+}
+
+function resultsCsv(state: MockApiState): string {
+  const header = [
+    "plan_id",
+    "job_id",
+    "task_code",
+    "host",
+    "result_type",
+    "status",
+    "changed",
+    "stdout",
+    "stderr",
+    "message",
+    "created_at",
+  ].join(",");
+  const rows: string[] = [header];
+  for (const j of state.jobs) {
+    for (const r of [...dryRunItems(j), ...runItems(j)]) {
+      const message = (r.stderr || r.stdout || "").slice(0, 500);
+      rows.push(
+        [
+          state.planId,
+          j.id,
+          j.task_code,
+          r.device_name,
+          r.result_type,
+          r.status,
+          r.changed,
+          JSON.stringify(r.stdout || ""),
+          JSON.stringify(r.stderr || ""),
+          JSON.stringify(message),
+          r.created_at,
+        ].join(","),
+      );
+    }
+  }
+  return rows.join("\n") + "\n";
 }
 
 function json(route: Route, status: number, body: unknown) {
@@ -308,7 +436,7 @@ export async function installMockApi(
         app: "compliance-remediation-platform",
         env: "test",
         docs: "/docs",
-        phase: "9B",
+        phase: "9C",
         auth: "role token required",
         mock_mode: "true",
         role: state.role,
@@ -459,6 +587,38 @@ export async function installMockApi(
       });
     }
 
+    if (
+      method === "GET" &&
+      path === `/execution-plans/${state.planId}/summary`
+    ) {
+      return json(route, 200, planSummary(state));
+    }
+
+    if (
+      method === "GET" &&
+      path === `/execution-plans/${state.planId}/audit`
+    ) {
+      return json(route, 200, {
+        plan_id: state.planId,
+        total: state.auditEvents.length,
+        items: state.auditEvents,
+      });
+    }
+
+    if (
+      method === "GET" &&
+      path === `/execution-plans/${state.planId}/results.csv`
+    ) {
+      return route.fulfill({
+        status: 200,
+        contentType: "text/csv; charset=utf-8",
+        headers: {
+          "Content-Disposition": `attachment; filename="plan-${state.planId}-results.csv"`,
+        },
+        body: resultsCsv(state),
+      });
+    }
+
     if (method === "GET" && path === "/execution-jobs") {
       const status = url.searchParams.get("status");
       let items = state.jobs.map((j) => jobPayload(j, state.planId));
@@ -489,8 +649,34 @@ export async function installMockApi(
             detail: `Dry-run not allowed for status=${j.status}`,
           });
         }
+        const oldStatus = j.status;
+        const startEvent =
+          oldStatus === "dry_run_failed"
+            ? "dry_run_retry_started"
+            : "dry_run_started";
+        pushAudit(state, {
+          action: "dry_run",
+          event: startEvent,
+          job_id: jobId,
+          task_code: j.task_code,
+          old_status: oldStatus,
+          new_status: "running",
+        });
         j.status = "dry_run_success";
         j.dryRunResults = true;
+        pushAudit(state, {
+          action: "dry_run",
+          event: "dry_run_completed",
+          job_id: jobId,
+          task_code: j.task_code,
+          old_status: oldStatus,
+          new_status: "dry_run_success",
+          hosts_total: 2,
+          hosts_success: 2,
+          hosts_failed: 0,
+          hosts_changed: 0,
+          hosts_skipped: 0,
+        });
         return json(route, 200, {
           job_id: jobId,
           mode: "dry_run",
@@ -513,13 +699,31 @@ export async function installMockApi(
             detail: "Approve allowed only when status=dry_run_success",
           });
         }
+        const oldStatus = j.status;
         j.status = "approved";
+        pushAudit(state, {
+          action: "approve",
+          event: "approved",
+          job_id: jobId,
+          task_code: j.task_code,
+          old_status: oldStatus,
+          new_status: "approved",
+        });
         return json(route, 200, jobPayload(j, state.planId));
       }
 
       if (method === "POST" && path === `/execution-jobs/${jobId}/reject`) {
         state.calls.reject.push(jobId);
+        const oldStatus = j.status;
         j.status = "rejected";
+        pushAudit(state, {
+          action: "reject",
+          event: "rejected",
+          job_id: jobId,
+          task_code: j.task_code,
+          old_status: oldStatus,
+          new_status: "rejected",
+        });
         return json(route, 200, jobPayload(j, state.planId));
       }
 
@@ -530,8 +734,30 @@ export async function installMockApi(
             detail: "Run allowed only when job status=approved",
           });
         }
+        const oldStatus = j.status;
+        pushAudit(state, {
+          action: "run",
+          event: "run_started",
+          job_id: jobId,
+          task_code: j.task_code,
+          old_status: oldStatus,
+          new_status: "running",
+        });
         j.status = "success";
         j.runResults = true;
+        pushAudit(state, {
+          action: "run",
+          event: "run_completed",
+          job_id: jobId,
+          task_code: j.task_code,
+          old_status: oldStatus,
+          new_status: "success",
+          hosts_total: 2,
+          hosts_success: 2,
+          hosts_failed: 0,
+          hosts_changed: 2,
+          hosts_skipped: 0,
+        });
         return json(route, 200, {
           job_id: jobId,
           mode: "apply",

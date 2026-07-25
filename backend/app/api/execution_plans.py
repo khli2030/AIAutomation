@@ -1,12 +1,14 @@
-"""Execution plan endpoints — Phase 5 + Phase 7 list (no Ansible execution)."""
+"""Execution plan endpoints — Phase 5 + Phase 7 list + Phase 9C audit/summary/CSV."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import READ_ROLES, AuthContext, require_roles
+from app.config import Settings, get_settings
 from app.db.session import get_db
 from app.models.execution_plan import ExecutionPlan
 from app.schemas.dashboard import ExecutionPlanListItem, ExecutionPlanListResponse
@@ -14,8 +16,12 @@ from app.schemas.plans import (
     ExecutionJobListResponse,
     ExecutionJobResponse,
     ExecutionPlanResponse,
+    PlanAuditEventResponse,
+    PlanAuditListResponse,
+    PlanExecutionSummaryResponse,
 )
 from app.services.plan_query import PlanQueryError, PlanQueryService
+from app.services.plan_reporting import PlanReportingService
 
 router = APIRouter()
 
@@ -121,3 +127,99 @@ def list_plan_jobs(
             )
         )
     return ExecutionJobListResponse(plan_id=plan_id, total=len(items), items=items)
+
+
+@router.get("/{plan_id}/audit", response_model=PlanAuditListResponse)
+def list_plan_audit(
+    plan_id: int,
+    db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
+    settings: Settings = Depends(get_settings),
+) -> PlanAuditListResponse:
+    """GET /execution-plans/{plan_id}/audit — newest-first execution audit timeline."""
+    _ = auth
+    service = PlanReportingService(db, settings=settings)
+    try:
+        events = service.list_audit_events(plan_id)
+    except PlanQueryError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return PlanAuditListResponse(
+        plan_id=plan_id,
+        total=len(events),
+        items=[
+            PlanAuditEventResponse(
+                id=e.id,
+                created_at=e.created_at,
+                actor=e.actor,
+                role=e.role,
+                action=e.action,
+                event=e.event,
+                plan_id=e.plan_id,
+                job_id=e.job_id,
+                batch_id=e.batch_id,
+                task_code=e.task_code,
+                old_status=e.old_status,
+                new_status=e.new_status,
+                mock_mode=e.mock_mode,
+                real_ansible_enabled=e.real_ansible_enabled,
+                hosts_total=e.hosts_total,
+                hosts_success=e.hosts_success,
+                hosts_failed=e.hosts_failed,
+                hosts_skipped=e.hosts_skipped,
+                hosts_changed=e.hosts_changed,
+            )
+            for e in events
+        ],
+    )
+
+
+@router.get("/{plan_id}/summary", response_model=PlanExecutionSummaryResponse)
+def get_plan_summary(
+    plan_id: int,
+    db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
+    settings: Settings = Depends(get_settings),
+) -> PlanExecutionSummaryResponse:
+    """GET /execution-plans/{plan_id}/summary — job/result counters for operators."""
+    _ = auth
+    service = PlanReportingService(db, settings=settings)
+    try:
+        summary = service.build_summary(plan_id)
+    except PlanQueryError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return PlanExecutionSummaryResponse(
+        plan_id=summary.plan_id,
+        batch_id=summary.batch_id,
+        total_jobs=summary.total_jobs,
+        jobs_by_status=summary.jobs_by_status,
+        total_targets=summary.total_targets,
+        dry_run_results_by_status=summary.dry_run_results_by_status,
+        run_results_by_status=summary.run_results_by_status,
+        failed_task_codes=summary.failed_task_codes,
+        skipped_task_codes=summary.skipped_task_codes,
+        mock_mode=summary.mock_mode,
+        real_ansible_enabled=summary.real_ansible_enabled,
+    )
+
+
+@router.get("/{plan_id}/results.csv")
+def export_plan_results_csv(
+    plan_id: int,
+    db: Session = Depends(get_db),
+    auth: AuthContext = require_roles(*READ_ROLES),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    """GET /execution-plans/{plan_id}/results.csv — per-host results export."""
+    _ = auth
+    service = PlanReportingService(db, settings=settings)
+    try:
+        csv_text = service.results_csv(plan_id)
+    except PlanQueryError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="plan-{plan_id}-results.csv"'
+        },
+    )

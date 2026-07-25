@@ -94,6 +94,42 @@ export type JobResult = {
   created_at: string;
 };
 
+export type PlanAuditEvent = {
+  id: number;
+  created_at: string;
+  actor: string;
+  role?: string | null;
+  action: string;
+  event: string;
+  plan_id?: number | null;
+  job_id?: number | null;
+  batch_id?: number | null;
+  task_code?: string | null;
+  old_status?: string | null;
+  new_status?: string | null;
+  mock_mode?: boolean | null;
+  real_ansible_enabled?: boolean | null;
+  hosts_total?: number | null;
+  hosts_success?: number | null;
+  hosts_failed?: number | null;
+  hosts_skipped?: number | null;
+  hosts_changed?: number | null;
+};
+
+export type PlanExecutionSummary = {
+  plan_id: number;
+  batch_id: number;
+  total_jobs: number;
+  jobs_by_status: Record<string, number>;
+  total_targets: number;
+  dry_run_results_by_status: Record<string, number>;
+  run_results_by_status: Record<string, number>;
+  failed_task_codes: string[];
+  skipped_task_codes: string[];
+  mock_mode: boolean;
+  real_ansible_enabled: boolean;
+};
+
 export type JobExecutionSummary = {
   job_id: number;
   mode: string;

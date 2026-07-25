@@ -6,13 +6,21 @@ import { useParams } from "next/navigation";
 import {
   ApiError,
   approveJob,
+  downloadPlanResultsCsv,
   dryRunJob,
   getPlan,
+  getPlanAudit,
+  getPlanSummary,
   listPlanJobs,
   rejectJob,
   runJob,
 } from "@/lib/api";
-import type { ExecutionJob, ExecutionPlan } from "@/types/api";
+import type {
+  ExecutionJob,
+  ExecutionPlan,
+  PlanAuditEvent,
+  PlanExecutionSummary,
+} from "@/types/api";
 import { ConfirmModal, ErrorBox, StatusBadge, SuccessBox } from "@/components/Ui";
 import { useAuth } from "@/hooks/useAuth";
 import {
@@ -37,25 +45,40 @@ function countByStatus(jobs: ExecutionJob[]): Record<string, number> {
   return counts;
 }
 
+function statusCount(
+  data: Record<string, number> | undefined,
+  keys: string[],
+): number {
+  if (!data) return 0;
+  return keys.reduce((n, k) => n + (data[k] || 0), 0);
+}
+
 export default function PlanDetailPage() {
   const params = useParams<{ planId: string }>();
   const planId = Number(params.planId);
   const { auth } = useAuth();
   const [plan, setPlan] = useState<ExecutionPlan | null>(null);
   const [jobs, setJobs] = useState<ExecutionJob[]>([]);
+  const [summary, setSummary] = useState<PlanExecutionSummary | null>(null);
+  const [auditEvents, setAuditEvents] = useState<PlanAuditEvent[]>([]);
+  const [activeTab, setActiveTab] = useState<"jobs" | "audit">("jobs");
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [busyJobId, setBusyJobId] = useState<number | null>(null);
   const [bulkProgress, setBulkProgress] = useState<BulkProgress | null>(null);
   const [confirmKind, setConfirmKind] = useState<BulkActionKind | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
 
   const canDryRun = Boolean(auth?.can_dry_run);
   const canApprove = Boolean(auth?.can_approve_job);
   const canReject = Boolean(auth?.can_reject_job);
   const canRun = Boolean(auth?.can_run);
 
-  const statusCounts = useMemo(() => countByStatus(jobs), [jobs]);
+  const statusCounts = useMemo(
+    () => summary?.jobs_by_status ?? countByStatus(jobs),
+    [summary, jobs],
+  );
   const waitingCount = filterJobsForBulk(jobs, "dry_run").length;
   const failedDryRunCount = filterJobsForBulk(jobs, "retry_dry_run").length;
   const dryRunSuccessCount = filterJobsForBulk(jobs, "approve").length;
@@ -63,9 +86,16 @@ export default function PlanDetailPage() {
 
   const refresh = useCallback(async () => {
     if (!planId) return;
-    const [p, j] = await Promise.all([getPlan(planId), listPlanJobs(planId)]);
+    const [p, j, s, a] = await Promise.all([
+      getPlan(planId),
+      listPlanJobs(planId),
+      getPlanSummary(planId),
+      getPlanAudit(planId),
+    ]);
     setPlan(p);
     setJobs(j.items);
+    setSummary(s);
+    setAuditEvents(a.items);
   }, [planId]);
 
   useEffect(() => {
@@ -186,6 +216,48 @@ export default function PlanDetailPage() {
 
   const confirmMeta = confirmKind ? confirmCopy(confirmKind) : null;
 
+  async function onExportCsv() {
+    setExportBusy(true);
+    setError(null);
+    try {
+      await downloadPlanResultsCsv(planId);
+      setMessage(`Exported plan #${planId} results CSV`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : String(err));
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
+  const dryRunOk = statusCount(summary?.dry_run_results_by_status, [
+    "success",
+    "ok",
+    "changed",
+  ]);
+  const dryRunSkip = statusCount(summary?.dry_run_results_by_status, [
+    "skipped",
+    "skip",
+  ]);
+  const dryRunFail = statusCount(summary?.dry_run_results_by_status, [
+    "failed",
+    "fail",
+    "unreachable",
+  ]);
+  const runOk = statusCount(summary?.run_results_by_status, [
+    "success",
+    "ok",
+    "changed",
+  ]);
+  const runSkip = statusCount(summary?.run_results_by_status, [
+    "skipped",
+    "skip",
+  ]);
+  const runFail = statusCount(summary?.run_results_by_status, [
+    "failed",
+    "fail",
+    "unreachable",
+  ]);
+
   return (
     <div>
       <div className="page-header">
@@ -203,7 +275,21 @@ export default function PlanDetailPage() {
 
       {plan ? (
         <div className="panel">
-          <h2>Plan summary</h2>
+          <div
+            className="btn-row"
+            style={{ justifyContent: "space-between", marginTop: 0 }}
+          >
+            <h2 style={{ margin: 0 }}>Plan summary</h2>
+            <button
+              className="btn"
+              type="button"
+              data-testid="plan-export-csv"
+              disabled={exportBusy || bulkBusy}
+              onClick={() => void onExportCsv()}
+            >
+              Export Results CSV
+            </button>
+          </div>
           <div className="grid-stats">
             <div className="stat">
               <div className="label">status</div>
@@ -217,11 +303,13 @@ export default function PlanDetailPage() {
             </div>
             <div className="stat">
               <div className="label">jobs</div>
-              <div className="value">{plan.job_count}</div>
+              <div className="value">{summary?.total_jobs ?? plan.job_count}</div>
             </div>
             <div className="stat">
               <div className="label">targets</div>
-              <div className="value">{plan.target_count}</div>
+              <div className="value">
+                {summary?.total_targets ?? plan.target_count}
+              </div>
             </div>
             <div className="stat">
               <div className="label">created_by</div>
@@ -239,8 +327,44 @@ export default function PlanDetailPage() {
         </div>
       ) : null}
 
-      <div className="panel">
-        <h2>Job status counts</h2>
+      <div className="panel" data-testid="plan-summary-cards">
+        <h2>Execution summary</h2>
+        <div className="grid-stats">
+          <div className="stat">
+            <div className="label">mode</div>
+            <div className="value" style={{ fontSize: "0.95rem" }} data-testid="plan-mode-badge">
+              {summary == null
+                ? "—"
+                : summary.mock_mode
+                  ? "MOCK MODE"
+                  : "REAL MODE"}
+              {summary != null
+                ? summary.real_ansible_enabled
+                  ? " · Ansible on"
+                  : " · Ansible off"
+                : ""}
+            </div>
+          </div>
+          <div className="stat">
+            <div className="label">targets</div>
+            <div className="value">{summary?.total_targets ?? "—"}</div>
+          </div>
+          <div className="stat">
+            <div className="label">dry run</div>
+            <div className="value" style={{ fontSize: "0.95rem" }}>
+              ok {dryRunOk} · skip {dryRunSkip} · fail {dryRunFail}
+            </div>
+          </div>
+          <div className="stat">
+            <div className="label">run</div>
+            <div className="value" style={{ fontSize: "0.95rem" }}>
+              ok {runOk} · skip {runSkip} · fail {runFail}
+            </div>
+          </div>
+        </div>
+        <h3 style={{ fontSize: "0.85rem", marginBottom: "0.5rem" }}>
+          Jobs by status
+        </h3>
         <div className="grid-stats">
           {Object.keys(statusCounts).length === 0 ? (
             <p className="muted">No jobs yet.</p>
@@ -333,117 +457,209 @@ export default function PlanDetailPage() {
       </div>
 
       <div className="panel">
-        <h2>Jobs</h2>
-        <div className="table-wrap">
-          <table className="data">
-            <thead>
-              <tr>
-                <th>Job ID</th>
-                <th>Task Code</th>
-                <th>Environment</th>
-                <th>Ansible Group</th>
-                <th>Criticality</th>
-                <th>Targets</th>
-                <th>Status</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((j) => {
-                const busy = busyJobId === j.id || bulkBusy;
-                const showDryRun =
-                  canDryRun && j.status === "waiting_dry_run";
-                const showRetryDryRun =
-                  canDryRun && j.status === "dry_run_failed";
-                const showApprove =
-                  canApprove && j.status === "dry_run_success";
-                const showReject = canReject && REJECT_STATUSES.has(j.status);
-                const showRun = canRun && j.status === "approved";
-                const showResults =
-                  j.status !== "waiting_dry_run" || Boolean(j.dry_run_status);
-                return (
-                  <tr key={j.id} data-testid={`plan-job-row-${j.id}`}>
-                    <td>{j.id}</td>
-                    <td className="mono">{j.task_code}</td>
-                    <td>{j.environment || "—"}</td>
-                    <td>{j.ansible_group || "—"}</td>
-                    <td>{j.criticality || "—"}</td>
-                    <td>{j.target_count}</td>
-                    <td>
-                      <StatusBadge status={j.status} />
-                    </td>
-                    <td>
-                      <div className="btn-row" style={{ margin: 0 }}>
-                        {showDryRun ? (
-                          <button
-                            className="btn primary"
-                            type="button"
-                            data-testid={`dry-run-${j.id}`}
-                            disabled={busy}
-                            onClick={() => void onDryRun(j)}
-                          >
-                            Dry Run
-                          </button>
-                        ) : null}
-                        {showRetryDryRun ? (
-                          <button
-                            className="btn primary"
-                            type="button"
-                            data-testid={`retry-dry-run-${j.id}`}
-                            disabled={busy}
-                            onClick={() => void onDryRun(j)}
-                          >
-                            Retry Dry Run
-                          </button>
-                        ) : null}
-                        {showApprove ? (
-                          <button
-                            className="btn"
-                            type="button"
-                            data-testid={`approve-${j.id}`}
-                            disabled={busy}
-                            onClick={() => void onApprove(j)}
-                          >
-                            Approve
-                          </button>
-                        ) : null}
-                        {showReject ? (
-                          <button
-                            className="btn danger"
-                            type="button"
-                            data-testid={`reject-${j.id}`}
-                            disabled={busy}
-                            onClick={() => void onReject(j)}
-                          >
-                            Reject
-                          </button>
-                        ) : null}
-                        {showRun ? (
-                          <button
-                            className="btn"
-                            type="button"
-                            data-testid={`run-${j.id}`}
-                            disabled={busy}
-                            onClick={() => void onRun(j)}
-                          >
-                            Run
-                          </button>
-                        ) : null}
-                        <Link
-                          className="btn"
-                          href={`/jobs/${j.id}`}
-                          data-testid={`results-${j.id}`}
-                        >
-                          Results
-                        </Link>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="btn-row" style={{ marginTop: 0 }}>
+          <button
+            className={`btn${activeTab === "jobs" ? " primary" : ""}`}
+            type="button"
+            data-testid="plan-tab-jobs"
+            onClick={() => setActiveTab("jobs")}
+          >
+            Jobs
+          </button>
+          <button
+            className={`btn${activeTab === "audit" ? " primary" : ""}`}
+            type="button"
+            data-testid="plan-tab-audit"
+            onClick={() => setActiveTab("audit")}
+          >
+            Audit
+          </button>
         </div>
+
+        {activeTab === "jobs" ? (
+          <>
+            <h2>Jobs</h2>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Job ID</th>
+                    <th>Task Code</th>
+                    <th>Environment</th>
+                    <th>Ansible Group</th>
+                    <th>Criticality</th>
+                    <th>Targets</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobs.map((j) => {
+                    const busy = busyJobId === j.id || bulkBusy;
+                    const showDryRun =
+                      canDryRun && j.status === "waiting_dry_run";
+                    const showRetryDryRun =
+                      canDryRun && j.status === "dry_run_failed";
+                    const showApprove =
+                      canApprove && j.status === "dry_run_success";
+                    const showReject =
+                      canReject && REJECT_STATUSES.has(j.status);
+                    const showRun = canRun && j.status === "approved";
+                    return (
+                      <tr key={j.id} data-testid={`plan-job-row-${j.id}`}>
+                        <td>{j.id}</td>
+                        <td className="mono">{j.task_code}</td>
+                        <td>{j.environment || "—"}</td>
+                        <td>{j.ansible_group || "—"}</td>
+                        <td>{j.criticality || "—"}</td>
+                        <td>{j.target_count}</td>
+                        <td>
+                          <StatusBadge status={j.status} />
+                        </td>
+                        <td>
+                          <div className="btn-row" style={{ margin: 0 }}>
+                            {showDryRun ? (
+                              <button
+                                className="btn primary"
+                                type="button"
+                                data-testid={`dry-run-${j.id}`}
+                                disabled={busy}
+                                onClick={() => void onDryRun(j)}
+                              >
+                                Dry Run
+                              </button>
+                            ) : null}
+                            {showRetryDryRun ? (
+                              <button
+                                className="btn primary"
+                                type="button"
+                                data-testid={`retry-dry-run-${j.id}`}
+                                disabled={busy}
+                                onClick={() => void onDryRun(j)}
+                              >
+                                Retry Dry Run
+                              </button>
+                            ) : null}
+                            {showApprove ? (
+                              <button
+                                className="btn"
+                                type="button"
+                                data-testid={`approve-${j.id}`}
+                                disabled={busy}
+                                onClick={() => void onApprove(j)}
+                              >
+                                Approve
+                              </button>
+                            ) : null}
+                            {showReject ? (
+                              <button
+                                className="btn danger"
+                                type="button"
+                                data-testid={`reject-${j.id}`}
+                                disabled={busy}
+                                onClick={() => void onReject(j)}
+                              >
+                                Reject
+                              </button>
+                            ) : null}
+                            {showRun ? (
+                              <button
+                                className="btn"
+                                type="button"
+                                data-testid={`run-${j.id}`}
+                                disabled={busy}
+                                onClick={() => void onRun(j)}
+                              >
+                                Run
+                              </button>
+                            ) : null}
+                            <Link
+                              className="btn"
+                              href={`/jobs/${j.id}`}
+                              data-testid={`results-${j.id}`}
+                            >
+                              Results
+                            </Link>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        ) : (
+          <>
+            <h2>Audit timeline</h2>
+            <div data-testid="plan-audit-timeline">
+              {auditEvents.length === 0 ? (
+                <p className="muted">No audit events yet.</p>
+              ) : (
+                <div className="table-wrap">
+                  <table className="data">
+                    <thead>
+                      <tr>
+                        <th>Timestamp</th>
+                        <th>Actor / role</th>
+                        <th>Action</th>
+                        <th>Job / task</th>
+                        <th>Status</th>
+                        <th>Counts</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {auditEvents.map((ev) => {
+                        const counts = [
+                          ev.hosts_total != null
+                            ? `total ${ev.hosts_total}`
+                            : null,
+                          ev.hosts_success != null
+                            ? `ok ${ev.hosts_success}`
+                            : null,
+                          ev.hosts_failed != null
+                            ? `fail ${ev.hosts_failed}`
+                            : null,
+                          ev.hosts_skipped != null
+                            ? `skip ${ev.hosts_skipped}`
+                            : null,
+                          ev.hosts_changed != null
+                            ? `changed ${ev.hosts_changed}`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ");
+                        return (
+                          <tr
+                            key={ev.id}
+                            data-testid="plan-audit-event"
+                          >
+                            <td className="mono" style={{ fontSize: "0.75rem" }}>
+                              {new Date(ev.created_at).toLocaleString()}
+                            </td>
+                            <td>
+                              {ev.actor}
+                              {ev.role ? ` · ${ev.role}` : ""}
+                            </td>
+                            <td className="mono">{ev.event || ev.action}</td>
+                            <td className="mono">
+                              {ev.task_code || "—"}
+                              {ev.job_id != null ? ` · #${ev.job_id}` : ""}
+                            </td>
+                            <td className="mono">
+                              {ev.old_status || "—"} → {ev.new_status || "—"}
+                            </td>
+                            <td className="muted">{counts || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <ConfirmModal

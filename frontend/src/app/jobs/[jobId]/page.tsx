@@ -3,9 +3,14 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ApiError, getJob, getJobResults } from "@/lib/api";
+import {
+  ApiError,
+  downloadPlanResultsCsv,
+  getJob,
+  getJobResults,
+} from "@/lib/api";
 import type { ExecutionJob, JobResult } from "@/types/api";
-import { ErrorBox, StatusBadge } from "@/components/Ui";
+import { ErrorBox, StatusBadge, SuccessBox } from "@/components/Ui";
 
 function ResultRow({
   result: r,
@@ -90,6 +95,8 @@ export default function JobResultsPage() {
     "all" | "success" | "skipped" | "failed"
   >("all");
   const [openId, setOpenId] = useState<number | null>(null);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (!jobId) return;
@@ -106,6 +113,23 @@ export default function JobResultsPage() {
       }
     })();
   }, [jobId]);
+
+  async function onExportCsv() {
+    if (!job?.plan_id) {
+      setError("Plan id missing; cannot export CSV for this job.");
+      return;
+    }
+    setExportBusy(true);
+    setError(null);
+    try {
+      await downloadPlanResultsCsv(job.plan_id);
+      setMessage(`Exported plan #${job.plan_id} results CSV`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : String(err));
+    } finally {
+      setExportBusy(false);
+    }
+  }
 
   const filtered = useMemo(() => {
     return allResults.filter((r) => {
@@ -150,12 +174,27 @@ export default function JobResultsPage() {
         </p>
       </div>
       <ErrorBox message={error} />
+      <SuccessBox message={message} />
       {job ? (
         <div className="panel">
-          <p>
-            <StatusBadge status={job.status} /> · {job.task_code} · targets=
-            {job.target_count}
-          </p>
+          <div
+            className="btn-row"
+            style={{ justifyContent: "space-between", marginTop: 0 }}
+          >
+            <p style={{ margin: 0 }}>
+              <StatusBadge status={job.status} /> · {job.task_code} · targets=
+              {job.target_count}
+            </p>
+            <button
+              className="btn"
+              type="button"
+              data-testid="results-export-csv"
+              disabled={exportBusy || !job.plan_id}
+              onClick={() => void onExportCsv()}
+            >
+              Export CSV
+            </button>
+          </div>
           {job.status === "dry_run_failed" ? (
             <div className="safety-note" data-testid="dry-run-failed-banner">
               This job is <code>dry_run_failed</code>. Failed host rows are

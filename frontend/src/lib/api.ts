@@ -15,6 +15,8 @@ import type {
   JobExecutionSummary,
   JobResult,
   Paginated,
+  PlanAuditEvent,
+  PlanExecutionSummary,
   RawImportRecord,
   ValidationSummary,
 } from "@/types/api";
@@ -246,6 +248,46 @@ export async function listPlanJobs(
   planId: number,
 ): Promise<{ plan_id: number; total: number; items: ExecutionJob[] }> {
   return apiFetch(`/execution-plans/${planId}/jobs`);
+}
+
+export async function getPlanSummary(
+  planId: number,
+): Promise<PlanExecutionSummary> {
+  return apiFetch(`/execution-plans/${planId}/summary`);
+}
+
+export async function getPlanAudit(
+  planId: number,
+): Promise<{ plan_id: number; total: number; items: PlanAuditEvent[] }> {
+  return apiFetch(`/execution-plans/${planId}/audit`);
+}
+
+/** Download plan results CSV using the role token (not apiFetch JSON). */
+export async function downloadPlanResultsCsv(planId: number): Promise<void> {
+  const token = getAdminToken();
+  if (!token) {
+    throw new ApiError(
+      401,
+      "API token is not set. Open Settings and paste a role token (never commit it).",
+    );
+  }
+  const res = await fetch(
+    `${getApiBase()}/execution-plans/${planId}/results.csv`,
+    {
+      headers: { "X-Admin-Token": token },
+      cache: "no-store",
+    },
+  );
+  if (!res.ok) throw await parseError(res);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `plan-${planId}-results.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 export async function listJobs(params: {

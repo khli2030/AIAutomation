@@ -108,3 +108,48 @@ class JobResultsListResponse(BaseModel):
     result_type_filter: str | None = None
     total: int
     items: list[JobResultResponse]
+
+
+# --- Phase 9C plan audit / summary ---
+
+
+class PlanAuditEventResponse(BaseModel):
+    id: int
+    created_at: datetime
+    actor: str
+    role: str | None = None
+    action: str
+    event: str
+    plan_id: int | None = None
+    job_id: int | None = None
+    batch_id: int | None = None
+    task_code: str | None = None
+    old_status: str | None = None
+    new_status: str | None = None
+    mock_mode: bool | None = None
+    real_ansible_enabled: bool | None = None
+    hosts_total: int | None = None
+    hosts_success: int | None = None
+    hosts_failed: int | None = None
+    hosts_skipped: int | None = None
+    hosts_changed: int | None = None
+
+
+class PlanAuditListResponse(BaseModel):
+    plan_id: int
+    total: int
+    items: list[PlanAuditEventResponse]
+
+
+class PlanExecutionSummaryResponse(BaseModel):
+    plan_id: int
+    batch_id: int
+    total_jobs: int
+    jobs_by_status: dict[str, int]
+    total_targets: int
+    dry_run_results_by_status: dict[str, int]
+    run_results_by_status: dict[str, int]
+    failed_task_codes: list[str]
+    skipped_task_codes: list[str]
+    mock_mode: bool
+    real_ansible_enabled: bool
