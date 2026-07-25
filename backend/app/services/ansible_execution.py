@@ -31,6 +31,11 @@ from app.models.execution_job_target import ExecutionJobTarget
 from app.models.job_result import JobResult
 from app.models.remediation_catalog import RemediationCatalog
 from app.services.audit import write_audit_log
+from app.services.execution_audit import (
+    build_execution_audit_details,
+    completion_event_for_mode,
+    start_event_for_dry_run,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -220,6 +225,18 @@ class AnsibleExecutionService:
     # MOCK path — no ansible-runner, no shell, no SSH
     # ------------------------------------------------------------------
 
+    def _batch_id_for_job(self, job: ExecutionJob) -> int | None:
+        """Resolve batch_id via plan when available (Phase 9C audit field)."""
+        plan_id = getattr(job, "plan_id", None)
+        if plan_id is None:
+            return None
+        from app.models.execution_plan import ExecutionPlan  # noqa: PLC0415
+
+        plan = self.db.get(ExecutionPlan, plan_id)
+        if plan is None:
+            return None
+        return int(plan.batch_id)
+
     def _execute_mock(
         self,
         *,
@@ -237,6 +254,8 @@ class AnsibleExecutionService:
         self._assert_mock_mode_safe()
 
         playbook_path = (catalog.ansible_playbook_path or "").strip()
+        old_status = job.status
+        batch_id = self._batch_id_for_job(job)
 
         now = datetime.now(UTC)
         running_status = (
@@ -250,23 +269,35 @@ class AnsibleExecutionService:
         job.started_at = job.started_at or now
         self.db.flush()
 
+        if mode == "dry_run":
+            start_event = start_event_for_dry_run(old_status=old_status)
+            action = "dry_run"
+        else:
+            start_event = "run_started"
+            action = "run"
+
         write_audit_log(
             self.db,
             actor=actor,
-            action="dry_run" if mode == "dry_run" else "run",
+            action=action,
             entity_type="execution_job",
             entity_id=job.id,
             role=role,
-            details={
-                "event": "started",
-                "mock_mode": True,
-                "mode": mode,
-                "result_type": _result_type_for_mode(mode),
-                "task_code": job.task_code,
-                "ansible_playbook_path": playbook_path,
-                "used_ai_generated_playbook": False,
-                "execution_backend": "mock",
-            },
+            details=build_execution_audit_details(
+                event=start_event,
+                job=job,
+                settings=self.settings,
+                old_status=old_status,
+                new_status=running_status,
+                batch_id=batch_id,
+                extra={
+                    "mode": mode,
+                    "result_type": _result_type_for_mode(mode),
+                    "ansible_playbook_path": playbook_path,
+                    "used_ai_generated_playbook": False,
+                    "execution_backend": "mock",
+                },
+            ),
         )
 
         # Replace previous results for THIS mode only — never wipe the other type.
@@ -291,6 +322,8 @@ class AnsibleExecutionService:
                 mock_mode=True,
                 actor=actor,
                 role=role,
+                old_status=old_status,
+                batch_id=batch_id,
             )
             self.db.commit()
             return summary
@@ -327,6 +360,8 @@ class AnsibleExecutionService:
             mock_mode=True,
             actor=actor,
             role=role,
+            old_status=old_status,
+            batch_id=batch_id,
         )
         self.db.commit()
         # Final safety check after mock work — still no forbidden modules.
@@ -445,6 +480,8 @@ class AnsibleExecutionService:
         actor: str = "system",
         role: str | None = None,
         write_completion_audit: bool = True,
+        old_status: str | None = None,
+        batch_id: int | None = None,
     ) -> JobExecutionSummary:
         now = datetime.now(UTC)
         hosts_total = len(outcomes)
@@ -482,6 +519,7 @@ class AnsibleExecutionService:
             job.dry_run_status = final_status
 
         if write_completion_audit:
+            event = completion_event_for_mode(mode=mode, final_status=final_status)
             write_audit_log(
                 self.db,
                 actor=actor,
@@ -489,20 +527,27 @@ class AnsibleExecutionService:
                 entity_type="execution_job",
                 entity_id=job.id,
                 role=role,
-                details={
-                    "event": "completed",
-                    "mock_mode": mock_mode,
-                    "mode": mode,
-                    "result_type": _result_type_for_mode(mode),
-                    "execution_backend": "mock" if mock_mode else "real",
-                    "job_status": job.status,
-                    "dry_run_status": job.dry_run_status,
-                    "hosts_total": hosts_total,
-                    "hosts_success": hosts_success,
-                    "hosts_failed": hosts_failed,
-                    "hosts_changed": hosts_changed,
-                    "hosts_skipped": hosts_skipped,
-                },
+                details=build_execution_audit_details(
+                    event=event,
+                    job=job,
+                    settings=self.settings,
+                    old_status=old_status,
+                    new_status=final_status,
+                    batch_id=batch_id,
+                    hosts_total=hosts_total,
+                    hosts_success=hosts_success,
+                    hosts_failed=hosts_failed,
+                    hosts_changed=hosts_changed,
+                    hosts_skipped=hosts_skipped,
+                    extra={
+                        "mode": mode,
+                        "result_type": _result_type_for_mode(mode),
+                        "execution_backend": "mock" if mock_mode else "real",
+                        "job_status": job.status,
+                        "dry_run_status": job.dry_run_status,
+                        "mock_mode": mock_mode,
+                    },
+                ),
             )
 
         return JobExecutionSummary(

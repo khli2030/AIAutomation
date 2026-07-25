@@ -13,9 +13,12 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from app.config import Settings, get_settings
 from app.constants.job_status import JobStatus
 from app.models.execution_job import ExecutionJob
+from app.models.execution_plan import ExecutionPlan
 from app.services.audit import write_audit_log
+from app.services.execution_audit import build_execution_audit_details
 
 # Approve is only allowed when dry-run has succeeded (exact status).
 APPROVABLE_STATUSES: frozenset[str] = frozenset(
@@ -38,14 +41,27 @@ class JobApprovalError(ValueError):
 
 
 class JobApprovalService:
-    def __init__(self, db: Session) -> None:
+    def __init__(self, db: Session, settings: Settings | None = None) -> None:
         self.db = db
+        self.settings = settings or get_settings()
 
     def get_job(self, job_id: int) -> ExecutionJob:
         job = self.db.get(ExecutionJob, job_id)
         if job is None:
             raise JobApprovalError(f"Execution job {job_id} not found")
         return job
+
+    def _batch_id(self, job: ExecutionJob) -> int | None:
+        plan = self.db.get(ExecutionPlan, job.plan_id)
+        if plan is None:
+            return None
+        batch_id = getattr(plan, "batch_id", None)
+        if batch_id is None:
+            return None
+        try:
+            return int(batch_id)
+        except (TypeError, ValueError):
+            return None
 
     def approve(
         self,
@@ -55,6 +71,7 @@ class JobApprovalService:
         role: str | None = None,
     ) -> ExecutionJob:
         job = self.get_job(job_id)
+        old_status = job.status
 
         if job.status == JobStatus.WAITING_DRY_RUN.value:
             raise JobApprovalError(
@@ -78,11 +95,14 @@ class JobApprovalService:
             entity_type="execution_job",
             entity_id=job.id,
             role=role,
-            details={
-                "status": job.status,
-                "task_code": job.task_code,
-                "plan_id": job.plan_id,
-            },
+            details=build_execution_audit_details(
+                event="approved",
+                job=job,
+                settings=self.settings,
+                old_status=old_status,
+                new_status=job.status,
+                batch_id=self._batch_id(job),
+            ),
         )
         self.db.commit()
         self.db.refresh(job)
@@ -96,6 +116,7 @@ class JobApprovalService:
         role: str | None = None,
     ) -> ExecutionJob:
         job = self.get_job(job_id)
+        old_status = job.status
 
         if job.status not in REJECTABLE_STATUSES:
             raise JobApprovalError(
@@ -115,11 +136,14 @@ class JobApprovalService:
             entity_type="execution_job",
             entity_id=job.id,
             role=role,
-            details={
-                "status": job.status,
-                "task_code": job.task_code,
-                "plan_id": job.plan_id,
-            },
+            details=build_execution_audit_details(
+                event="rejected",
+                job=job,
+                settings=self.settings,
+                old_status=old_status,
+                new_status=job.status,
+                batch_id=self._batch_id(job),
+            ),
         )
         self.db.commit()
         self.db.refresh(job)
