@@ -85,6 +85,11 @@ class Settings(BaseSettings):
     real_ansible_remote_user: str | None = None
     real_ansible_timeout_seconds: int = TIMEOUT_DEFAULT_SECONDS
 
+    # Phase 10C single-host lab pilot guard (safe defaults).
+    # Pilot mode must be explicitly enabled; max hosts defaults to 1.
+    real_ansible_pilot_mode: bool = False
+    real_ansible_max_hosts_per_run: int = 1
+
     # AI Analyzer is interface-only until explicitly configured (mock by default).
     ai_provider: str = "mock"
     ai_enabled: bool = False
@@ -104,6 +109,20 @@ class Settings(BaseSettings):
             return TIMEOUT_MIN_SECONDS
         if n > TIMEOUT_MAX_SECONDS:
             return TIMEOUT_MAX_SECONDS
+        return n
+
+    @field_validator("real_ansible_max_hosts_per_run", mode="before")
+    @classmethod
+    def _validate_max_hosts_per_run(cls, value: object) -> int:
+        """Single-host pilot default; clamp to [1, 5] for safety."""
+        try:
+            n = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 1
+        if n < 1:
+            return 1
+        if n > 5:
+            return 5
         return n
 
     @field_validator(

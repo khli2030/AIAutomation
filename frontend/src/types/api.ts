@@ -144,6 +144,9 @@ export type AnsibleSafetyStatus = {
   allowed_hosts?: string[];
   allowed_task_codes?: string[];
   timeout_seconds?: number;
+  pilot_mode?: boolean;
+  max_hosts_per_run?: number;
+  single_host_pilot_qualified?: boolean;
 };
 
 export type LabConfigPreview = {
@@ -159,6 +162,26 @@ export type LabConfigPreview = {
   real_ansible_enabled: boolean;
   check_mode_only: boolean;
   connectivity_allowed: boolean;
+  pilot_mode?: boolean;
+  max_hosts_per_run?: number;
+  pilot_ready?: boolean;
+  pilot_readiness_errors?: string[];
+};
+
+export type PilotReadiness = {
+  ready: boolean;
+  mock_mode: boolean;
+  real_ansible_enabled: boolean;
+  check_mode_only: boolean;
+  pilot_mode: boolean;
+  max_hosts_per_run: number;
+  allowed_hosts: string[];
+  allowed_task_codes: string[];
+  inventory_configured: boolean;
+  remote_user_configured: boolean;
+  private_key_configured: boolean;
+  errors: string[];
+  warnings: string[];
 };
 
 export type JobExecutionSummary = {

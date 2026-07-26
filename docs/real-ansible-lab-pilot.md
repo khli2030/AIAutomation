@@ -1,6 +1,8 @@
-# Real Ansible Lab Connectivity Pilot (Phase 10B)
+# Real Ansible Single-Host Lab Pilot (Phase 10C)
 
-Lab-only preparation for **connectivity checks** against explicitly allowlisted hosts.
+Controlled **single-host** lab pilot for connectivity checks and **check-mode**
+real dry-run against explicitly allowlisted hosts.
+
 This does **not** enable production execution or real apply/remediation.
 
 ## Safety defaults (do not change lightly)
@@ -10,6 +12,8 @@ This does **not** enable production execution or real apply/remediation.
 | `MOCK_MODE` | `true` |
 | `REAL_ANSIBLE_ENABLED` | `false` |
 | `REAL_ANSIBLE_CHECK_MODE_ONLY` | `true` |
+| `REAL_ANSIBLE_PILOT_MODE` | `false` |
+| `REAL_ANSIBLE_MAX_HOSTS_PER_RUN` | `1` |
 | `REAL_ANSIBLE_ALLOWED_HOSTS` | empty |
 | `REAL_ANSIBLE_ALLOWED_TASK_CODES` | empty |
 
@@ -18,28 +22,36 @@ This does **not** enable production execution or real apply/remediation.
 - Never commit private keys or production inventory.
 - Never put real secrets in `.env.example` or git.
 - Excel Remediation text and AI suggestions are never executed.
-- Phase 10B is connectivity / check-mode preparation only — no real apply endpoint.
+- Phase 10C is single-host connectivity / check-mode only — **no real apply endpoint**.
+- **Do not use production or critical hosts** for this pilot.
 
-## 1. Create a lab host
+## Single-host pilot checklist
 
-1. Provision a disposable Linux lab VM on an isolated network.
+1. Provision **one** disposable Linux lab VM on an isolated network.
 2. Install Python 3 and ensure SSH key auth from the Ansible control host.
 3. Pick a stable inventory name (example: `lab-server-01`).
-4. Do **not** reuse production hosts or production inventory files.
+4. Copy example inventory locally — never commit the real inventory file.
+5. Configure `.env` on the lab control host only (see example below).
+6. Verify `GET /ansible/safety-status` and `GET /ansible/pilot-readiness`.
+7. Run connectivity check against the single allowlisted host.
+8. Run real dry-run only for a job with **one** target and an allowlisted task code.
+9. Keep rollback settings ready (see below).
 
-## 2. Configure `.env` locally (lab control host only)
+## Environment variable example
 
 ```bash
 cp .env.example .env
 # Edit .env on the lab control host — keep secrets out of git.
 ```
 
-For a controlled lab pilot (still check-mode / connectivity only):
+For a controlled **single-host** lab pilot (still check-mode only):
 
 ```bash
 MOCK_MODE=false
 REAL_ANSIBLE_ENABLED=true
 REAL_ANSIBLE_CHECK_MODE_ONLY=true
+REAL_ANSIBLE_PILOT_MODE=true
+REAL_ANSIBLE_MAX_HOSTS_PER_RUN=1
 APP_ENV=lab
 
 REAL_ANSIBLE_ALLOWED_HOSTS=lab-server-01
@@ -58,48 +70,55 @@ cp ansible/inventory/lab.example.ini /var/lib/compliance/lab.ini
 # Edit hostnames/IPs for your lab only — never commit that file.
 ```
 
-## 3. Allowlisted hosts
-
-`REAL_ANSIBLE_ALLOWED_HOSTS` is a comma-separated list. Examples:
-
-```bash
-REAL_ANSIBLE_ALLOWED_HOSTS=lab-server-01
-REAL_ANSIBLE_ALLOWED_HOSTS=lab-server-01,10.10.10.15
-```
-
-Hosts not on this list are blocked for connectivity and real dry-run.
-
-## 4. Allowlisted task codes
-
-`REAL_ANSIBLE_ALLOWED_TASK_CODES` is a comma-separated list of catalog task codes:
-
-```bash
-REAL_ANSIBLE_ALLOWED_TASK_CODES=AIDE_INSTALL,SSH_MAX_AUTH_TRIES
-```
-
-Unknown codes (not in `remediation_catalog`) are rejected by lab config validation.
-Never substitute Excel Remediation text or AI draft playbooks.
-
-## 5. Run safety-status
+## Verify safety-status
 
 ```bash
 curl -sS -H "X-Admin-Token: $ADMIN_TOKEN" \
   http://127.0.0.1:8000/ansible/safety-status | jq .
 ```
 
-Also available:
+Expect when pilot is correctly configured:
+
+- `pilot_mode=true`
+- `max_hosts_per_run=1`
+- `single_host_pilot_qualified=true`
+- `real_execution_available=true`
+- `check_mode_only=true`
+
+Also:
 
 ```bash
 curl -sS -H "X-Admin-Token: $ADMIN_TOKEN" \
   http://127.0.0.1:8000/ansible/lab-config-preview | jq .
 ```
 
-`lab-config-preview` returns sanitized fields only (booleans + allowlists + validation errors).
-It never returns private key contents or secret path material.
+`lab-config-preview` returns sanitized fields only (`pilot_ready`,
+`pilot_readiness_errors`, allowlists, validation). It never returns private key
+contents or secret path material.
 
-## 6. Run connectivity-check
+## Verify pilot-readiness
 
-Operator/admin only. Blocked by default when real Ansible is disabled.
+```bash
+curl -sS -H "X-Admin-Token: $ADMIN_TOKEN" \
+  http://127.0.0.1:8000/ansible/pilot-readiness | jq .
+```
+
+Returns:
+
+- `ready` true/false
+- `mock_mode`, `real_ansible_enabled`, `check_mode_only`, `pilot_mode`
+- `max_hosts_per_run`
+- `allowed_hosts`, `allowed_task_codes`
+- inventory / remote user / private key configured flags
+- `errors`, `warnings`
+
+With stock defaults, `ready=false` and errors explain why.
+
+## Run connectivity-check
+
+Operator/admin only. Blocked by default when pilot mode / real Ansible is disabled.
+Enforces allowlist **and** `REAL_ANSIBLE_MAX_HOSTS_PER_RUN` (default 1).
+Does **not** run any playbook.
 
 ```bash
 curl -sS -X POST -H "X-Admin-Token: $OPERATOR_TOKEN" \
@@ -111,21 +130,61 @@ curl -sS -X POST -H "X-Admin-Token: $OPERATOR_TOKEN" \
 Behavior:
 
 - Only allowlisted hosts may be checked
+- Host count capped by `REAL_ANSIBLE_MAX_HOSTS_PER_RUN`
 - Uses Ansible `ping` module (no playbook apply)
 - Captures stdout/stderr
 - Writes audit events (`real_connectivity_check_*` / `real_execution_blocked`)
 
-## 7. Confirm blocked behavior (defaults)
+## Run real dry-run
 
-With stock defaults (`MOCK_MODE=true`, `REAL_ANSIBLE_ENABLED=false`, empty allowlists):
+Check-mode only. Job must have ≤ `REAL_ANSIBLE_MAX_HOSTS_PER_RUN` targets,
+allowlisted host(s), and allowlisted catalog task code. Never executes Excel
+Remediation text or AI suggestions.
 
-- `GET /ansible/safety-status` → `real_execution_available=false` + clear reasons
-- `GET /ansible/lab-config-preview` → `validation_status=blocked`
+```bash
+curl -sS -X POST -H "X-Admin-Token: $OPERATOR_TOKEN" \
+  http://127.0.0.1:8000/execution-jobs/<job_id>/real-dry-run | jq .
+```
+
+Results are stored with `result_type=real_dry_run`. Audit events are written for
+start/complete/block.
+
+UI: Plan Detail shows **Real Ansible Dry Run — Single Host Check Mode** only when
+pilot readiness is green and the job target count fits the max-hosts cap.
+
+## Confirm blocked behavior (defaults)
+
+With stock defaults (`MOCK_MODE=true`, `REAL_ANSIBLE_ENABLED=false`,
+`REAL_ANSIBLE_PILOT_MODE=false`, empty allowlists):
+
+- `GET /ansible/pilot-readiness` → `ready=false` + clear errors
+- `GET /ansible/safety-status` → `real_execution_available=false` + reasons
+- `GET /ansible/lab-config-preview` → `pilot_ready=false`, `validation_status=blocked`
 - `POST /ansible/connectivity-check` → `blocked=true` + audit `real_execution_blocked`
-- Non-allowlisted hosts → blocked even if real Ansible is later enabled
-- UI Safety page shows validation errors and disables connectivity when unavailable
+- Jobs with more than one target → real dry-run blocked / UI button hidden
+- No real apply endpoint exists
+
+## Rollback / stop instructions
+
+To immediately stop the pilot on the control host:
+
+```bash
+# Preferred: restore safe defaults in .env and restart the API
+MOCK_MODE=true
+REAL_ANSIBLE_ENABLED=false
+REAL_ANSIBLE_PILOT_MODE=false
+REAL_ANSIBLE_CHECK_MODE_ONLY=true
+REAL_ANSIBLE_MAX_HOSTS_PER_RUN=1
+REAL_ANSIBLE_ALLOWED_HOSTS=
+REAL_ANSIBLE_ALLOWED_TASK_CODES=
+```
+
+Or unset lab inventory/key paths and restart. Connectivity and real dry-run will
+block again; mock dry-run / approval flows remain available.
 
 ## Related docs
 
+- [`docs/20-phase10c-single-host-pilot.md`](20-phase10c-single-host-pilot.md)
+- [`docs/19-phase10b-lab-inventory-connectivity.md`](19-phase10b-lab-inventory-connectivity.md)
 - [`docs/18-phase10a-real-ansible-pilot-prep.md`](18-phase10a-real-ansible-pilot-prep.md)
 - [`docs/14-phase8c-lab-real-dry-run.md`](14-phase8c-lab-real-dry-run.md)

@@ -35,6 +35,9 @@ class AnsibleSafetyStatusResponse(BaseModel):
     allowed_hosts: list[str] = Field(default_factory=list)
     allowed_task_codes: list[str] = Field(default_factory=list)
     timeout_seconds: int = 120
+    pilot_mode: bool = False
+    max_hosts_per_run: int = 1
+    single_host_pilot_qualified: bool = False
 
 
 class ConnectivityCheckRequest(BaseModel):
@@ -70,3 +73,23 @@ class LabConfigPreviewResponse(BaseModel):
     real_ansible_enabled: bool = False
     check_mode_only: bool = True
     connectivity_allowed: bool = False
+    pilot_mode: bool = False
+    max_hosts_per_run: int = 1
+    pilot_ready: bool = False
+    pilot_readiness_errors: list[str] = Field(default_factory=list)
+
+
+class PilotReadinessResponse(BaseModel):
+    ready: bool
+    mock_mode: bool
+    real_ansible_enabled: bool
+    check_mode_only: bool
+    pilot_mode: bool
+    max_hosts_per_run: int
+    allowed_hosts: list[str] = Field(default_factory=list)
+    allowed_task_codes: list[str] = Field(default_factory=list)
+    inventory_configured: bool = False
+    remote_user_configured: bool = False
+    private_key_configured: bool = False
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)

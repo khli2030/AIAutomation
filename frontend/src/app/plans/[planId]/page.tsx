@@ -9,6 +9,7 @@ import {
   downloadPlanResultsCsv,
   dryRunJob,
   getAnsibleSafetyStatus,
+  getPilotReadiness,
   getPlan,
   getPlanAudit,
   getPlanSummary,
@@ -21,6 +22,7 @@ import type {
   AnsibleSafetyStatus,
   ExecutionJob,
   ExecutionPlan,
+  PilotReadiness,
   PlanAuditEvent,
   PlanExecutionSummary,
 } from "@/types/api";
@@ -73,13 +75,23 @@ export default function PlanDetailPage() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [exportBusy, setExportBusy] = useState(false);
   const [safety, setSafety] = useState<AnsibleSafetyStatus | null>(null);
+  const [pilot, setPilot] = useState<PilotReadiness | null>(null);
   const [realDryRunJobId, setRealDryRunJobId] = useState<number | null>(null);
 
   const canDryRun = Boolean(auth?.can_dry_run);
   const canApprove = Boolean(auth?.can_approve_job);
   const canReject = Boolean(auth?.can_reject_job);
   const canRun = Boolean(auth?.can_run);
-  const realAvailable = Boolean(safety?.real_execution_available);
+  const maxHostsPerRun =
+    pilot?.max_hosts_per_run ?? safety?.max_hosts_per_run ?? 1;
+  const pilotReady = Boolean(
+    pilot?.ready ?? safety?.single_host_pilot_qualified,
+  );
+  const realAvailable = Boolean(
+    pilotReady &&
+      safety?.real_execution_available &&
+      (safety?.pilot_mode ?? pilot?.pilot_mode),
+  );
 
   const statusCounts = useMemo(
     () => summary?.jobs_by_status ?? countByStatus(jobs),
@@ -92,18 +104,20 @@ export default function PlanDetailPage() {
 
   const refresh = useCallback(async () => {
     if (!planId) return;
-    const [p, j, s, a, safetyStatus] = await Promise.all([
+    const [p, j, s, a, safetyStatus, readiness] = await Promise.all([
       getPlan(planId),
       listPlanJobs(planId),
       getPlanSummary(planId),
       getPlanAudit(planId),
       getAnsibleSafetyStatus(),
+      getPilotReadiness(),
     ]);
     setPlan(p);
     setJobs(j.items);
     setSummary(s);
     setAuditEvents(a.items);
     setSafety(safetyStatus);
+    setPilot(readiness);
   }, [planId]);
 
   useEffect(() => {
@@ -346,26 +360,35 @@ export default function PlanDetailPage() {
       ) : null}
 
       <div className="panel" data-testid="plan-real-ansible-status">
-        <h2>Real Ansible (Phase 10A)</h2>
-        {!safety ? (
+        <h2>Real Ansible (Phase 10C)</h2>
+        {!safety || !pilot ? (
           <p className="muted">Loading safety status…</p>
         ) : (
           <>
             <p data-testid="plan-real-ansible-badge">
-              {safety.real_execution_available
-                ? "AVAILABLE — check-mode pilot path configured"
-                : "BLOCKED — real Ansible not available"}
+              {realAvailable
+                ? "AVAILABLE — single-host check-mode pilot ready"
+                : "BLOCKED — real Ansible pilot not ready"}
+            </p>
+            <p className="muted" data-testid="plan-max-hosts-note">
+              max_hosts_per_run={maxHostsPerRun}. Jobs with more targets cannot
+              use real dry-run.
             </p>
             <ul className="muted" data-testid="plan-real-ansible-reasons">
-              {(safety.reasons || []).slice(0, 6).map((r) => (
-                <li key={r}>{r}</li>
-              ))}
+              {(pilot.errors?.length
+                ? pilot.errors
+                : safety.reasons || []
+              )
+                .slice(0, 6)
+                .map((r) => (
+                  <li key={r}>{r}</li>
+                ))}
             </ul>
             <p className="muted" style={{ marginBottom: 0 }}>
               <Link href="/safety">Open Safety / Ansible</Link>
               {" · "}
-              Real dry-run button appears only when available. Apply/run remains
-              blocked by default.
+              Real dry-run appears only when pilot readiness is green and the job
+              has at most {maxHostsPerRun} target(s). Apply/run remains blocked.
             </p>
           </>
         )}
@@ -549,9 +572,19 @@ export default function PlanDetailPage() {
                     const showReject =
                       canReject && REJECT_STATUSES.has(j.status);
                     const showRun = canRun && j.status === "approved";
+                    const jobWithinHostLimit =
+                      (j.target_count ?? 0) <= maxHostsPerRun;
                     const showRealDryRun =
                       canDryRun &&
                       realAvailable &&
+                      jobWithinHostLimit &&
+                      (j.status === "waiting_dry_run" ||
+                        j.status === "dry_run_failed" ||
+                        j.status === "dry_run_success");
+                    const showRealDryRunBlockedReason =
+                      canDryRun &&
+                      realAvailable &&
+                      !jobWithinHostLimit &&
                       (j.status === "waiting_dry_run" ||
                         j.status === "dry_run_failed" ||
                         j.status === "dry_run_success");
@@ -598,8 +631,18 @@ export default function PlanDetailPage() {
                                 disabled={busy}
                                 onClick={() => setRealDryRunJobId(j.id)}
                               >
-                                Real Ansible Dry Run (Check Mode)
+                                Real Ansible Dry Run — Single Host Check Mode
                               </button>
+                            ) : null}
+                            {showRealDryRunBlockedReason ? (
+                              <span
+                                className="muted"
+                                data-testid={`real-dry-run-blocked-${j.id}`}
+                                style={{ fontSize: "0.8rem" }}
+                              >
+                                Real dry-run hidden: job has {j.target_count}{" "}
+                                target(s); max_hosts_per_run={maxHostsPerRun}
+                              </span>
                             ) : null}
                             {showApprove ? (
                               <button
@@ -738,8 +781,8 @@ export default function PlanDetailPage() {
 
       <ConfirmModal
         open={realDryRunJobId != null}
-        title="Real Ansible Dry Run (Check Mode)"
-        body="This runs Ansible in check mode only on allowlisted hosts. No changes are applied. Excel Remediation text and AI suggestions are never executed."
+        title="Real Ansible Dry Run — Single Host Check Mode"
+        body="This will run Ansible check mode only on one allowlisted lab host. No changes should be applied. Excel Remediation text and AI suggestions are never executed."
         confirmLabel="Run check-mode dry-run"
         danger={false}
         busy={busyJobId != null}

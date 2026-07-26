@@ -97,6 +97,7 @@ def test_lab_config_preview_hides_secrets(tmp_path):
     settings = _settings(
         mock_mode=False,
         real_ansible_enabled=True,
+        real_ansible_pilot_mode=True,
         app_env="lab",
         real_ansible_allowed_hosts="lab-server-01",
         real_ansible_allowed_task_codes="AIDE_INSTALL,SSH_MAX_AUTH_TRIES",
@@ -118,6 +119,7 @@ def test_lab_config_preview_hides_secrets(tmp_path):
     assert payload["remote_user_configured"] is True
     assert "lab-server-01" in payload["allowed_hosts"]
     assert payload["validation_status"] == "ok"
+    assert payload["pilot_ready"] is True
 
 
 def test_empty_allowlists_block_real_execution():

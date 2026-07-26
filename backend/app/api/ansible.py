@@ -20,10 +20,14 @@ from app.schemas.ansible import (
     ConnectivityCheckRequest,
     ConnectivityCheckResponse,
     LabConfigPreviewResponse,
+    PilotReadinessResponse,
     PreflightCheckResponse,
 )
 from app.services.ansible_safety import build_preflight_report
-from app.services.lab_ansible_config import build_lab_config_preview
+from app.services.lab_ansible_config import (
+    build_lab_config_preview,
+    build_pilot_readiness,
+)
 from app.services.real_ansible_pilot import (
     RealAnsiblePilotError,
     RealAnsiblePilotService,
@@ -89,6 +93,20 @@ def ansible_lab_config_preview(
         settings, known_task_codes=_known_task_codes(db)
     )
     return LabConfigPreviewResponse(**preview.to_dict())
+
+
+@router.get("/pilot-readiness", response_model=PilotReadinessResponse)
+def ansible_pilot_readiness(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    auth: AuthContext = require_roles(*READ_ROLES),
+) -> PilotReadinessResponse:
+    """Phase 10C single-host pilot readiness — configuration only, no execution."""
+    _ = auth
+    readiness = build_pilot_readiness(
+        settings, known_task_codes=_known_task_codes(db)
+    )
+    return PilotReadinessResponse(**readiness.to_dict())
 
 
 @router.post("/connectivity-check", response_model=ConnectivityCheckResponse)

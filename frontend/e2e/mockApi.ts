@@ -64,13 +64,18 @@ export type MockApiState = {
   /** Phase 9C execution audit timeline (newest first). */
   auditEvents: MockAuditEvent[];
   nextAuditId: number;
-  /** Phase 10A safety-status overrides for UI tests. */
+  /** Phase 10A/10C safety-status overrides for UI tests. */
   realExecutionAvailable: boolean;
   realAnsibleEnabled: boolean;
   checkModeOnly: boolean;
+  pilotMode: boolean;
+  maxHostsPerRun: number;
+  pilotReady: boolean;
   allowedHostsCount: number;
   allowedTaskCodesCount: number;
   safetyReasons: string[];
+  pilotErrors: string[];
+  pilotWarnings: string[];
   callsRealDryRun: number[];
 };
 
@@ -78,11 +83,13 @@ export type InstallMockOptions = {
   role?: MockApiState["role"];
   jobCount?: number;
   realExecutionAvailable?: boolean;
+  /** When true with realExecutionAvailable, jobs default to single-host target_count. */
+  pilotReady?: boolean;
 };
 
 const now = () => new Date().toISOString();
 
-function makeJobs(count: number): MockJob[] {
+function makeJobs(count: number, targetCount = 2): MockJob[] {
   return Array.from({ length: count }, (_, i) => ({
     id: i + 1,
     status: "waiting_dry_run" as const,
@@ -93,7 +100,7 @@ function makeJobs(count: number): MockJob[] {
     environment: "test",
     criticality: "High",
     ansible_group: "linux_test",
-    target_count: 2,
+    target_count: targetCount,
   }));
 }
 
@@ -102,12 +109,15 @@ export function createInitialState(
 ): MockApiState {
   const jobCount = options.jobCount ?? 1;
   const realAvailable = options.realExecutionAvailable ?? false;
+  const pilotReady =
+    options.pilotReady ?? realAvailable;
+  const targetCount = realAvailable && pilotReady ? 1 : 2;
   return {
     batchId: 1,
     planId: 1,
     batchStatus: "parsed",
     validated: false,
-    jobs: makeJobs(jobCount),
+    jobs: makeJobs(jobCount, targetCount),
     role: options.role ?? "admin",
     calls: { dryRun: [], approve: [], run: [], reject: [] },
     auditEvents: [],
@@ -115,6 +125,9 @@ export function createInitialState(
     realExecutionAvailable: realAvailable,
     realAnsibleEnabled: realAvailable,
     checkModeOnly: true,
+    pilotMode: realAvailable && pilotReady,
+    maxHostsPerRun: 1,
+    pilotReady: realAvailable && pilotReady,
     allowedHostsCount: realAvailable ? 1 : 0,
     allowedTaskCodesCount: realAvailable ? 1 : 0,
     safetyReasons: realAvailable
@@ -125,9 +138,22 @@ export function createInitialState(
           "MOCK_MODE=true (safe default)",
           "REAL_ANSIBLE_ENABLED=false (safe default)",
           "REAL_ANSIBLE_CHECK_MODE_ONLY=true — apply/run remains blocked",
+          "REAL_ANSIBLE_PILOT_MODE=false — single-host lab pilot disabled",
           "No hosts in REAL_ANSIBLE_ALLOWED_HOSTS",
           "No task codes in REAL_ANSIBLE_ALLOWED_TASK_CODES",
         ],
+    pilotErrors: realAvailable && pilotReady
+      ? []
+      : [
+          "REAL_ANSIBLE_PILOT_MODE=false — pilot not ready",
+          "MOCK_MODE=true — pilot not ready",
+          "REAL_ANSIBLE_ENABLED=false — pilot not ready",
+        ],
+    pilotWarnings: [
+      "Single-host pilot: REAL_ANSIBLE_MAX_HOSTS_PER_RUN=1 (jobs with more targets cannot use real dry-run)",
+      "Check-mode only — real apply/run remains blocked in Phase 10C",
+      "Never use production or critical hosts for the lab pilot",
+    ],
     callsRealDryRun: [],
   };
 }
@@ -506,7 +532,7 @@ export async function installMockApi(
 
     if (method === "GET" && path === "/ansible/safety-status") {
       return json(route, 200, {
-        mock_mode: true,
+        mock_mode: !state.pilotReady,
         real_ansible_enabled: state.realAnsibleEnabled,
         check_mode_only: state.checkModeOnly,
         allowed_hosts_count: state.allowedHostsCount,
@@ -514,13 +540,16 @@ export async function installMockApi(
         inventory_configured: state.realExecutionAvailable,
         private_key_configured: state.realExecutionAvailable,
         remote_user_configured: state.realExecutionAvailable,
-        real_execution_available: state.realExecutionAvailable,
+        real_execution_available: state.realExecutionAvailable && state.pilotReady,
         reasons: state.safetyReasons,
         allowed_hosts: state.realExecutionAvailable ? ["e2e-linux-01"] : [],
         allowed_task_codes: state.realExecutionAvailable
           ? ["SSH_DISABLE_ROOT_LOGIN"]
           : [],
         timeout_seconds: 120,
+        pilot_mode: state.pilotMode,
+        max_hosts_per_run: state.maxHostsPerRun,
+        single_host_pilot_qualified: state.pilotReady,
       });
     }
 
@@ -534,21 +563,43 @@ export async function installMockApi(
         private_key_configured: state.realExecutionAvailable,
         remote_user_configured: state.realExecutionAvailable,
         timeout_seconds: 120,
-        validation_status: state.realExecutionAvailable ? "ok" : "blocked",
-        validation_errors: state.realExecutionAvailable
-          ? []
-          : state.safetyReasons,
-        mock_mode: true,
+        validation_status: state.pilotReady ? "ok" : "blocked",
+        validation_errors: state.pilotReady ? [] : state.safetyReasons,
+        mock_mode: !state.pilotReady,
         real_ansible_enabled: state.realAnsibleEnabled,
         check_mode_only: state.checkModeOnly,
-        connectivity_allowed: state.realExecutionAvailable,
+        connectivity_allowed: state.pilotReady,
+        pilot_mode: state.pilotMode,
+        max_hosts_per_run: state.maxHostsPerRun,
+        pilot_ready: state.pilotReady,
+        pilot_readiness_errors: state.pilotReady ? [] : state.pilotErrors,
+      });
+    }
+
+    if (method === "GET" && path === "/ansible/pilot-readiness") {
+      return json(route, 200, {
+        ready: state.pilotReady,
+        mock_mode: !state.pilotReady,
+        real_ansible_enabled: state.realAnsibleEnabled,
+        check_mode_only: state.checkModeOnly,
+        pilot_mode: state.pilotMode,
+        max_hosts_per_run: state.maxHostsPerRun,
+        allowed_hosts: state.realExecutionAvailable ? ["e2e-linux-01"] : [],
+        allowed_task_codes: state.realExecutionAvailable
+          ? ["SSH_DISABLE_ROOT_LOGIN"]
+          : [],
+        inventory_configured: state.realExecutionAvailable,
+        remote_user_configured: state.realExecutionAvailable,
+        private_key_configured: state.realExecutionAvailable,
+        errors: state.pilotReady ? [] : state.pilotErrors,
+        warnings: state.pilotWarnings,
       });
     }
 
     if (method === "POST" && path === "/ansible/connectivity-check") {
       const body = req.postDataJSON() as { hosts?: string[] };
       const hosts = body?.hosts || [];
-      if (!state.realAnsibleEnabled) {
+      if (hosts.length > state.maxHostsPerRun) {
         pushAudit(state, {
           action: "connectivity_check",
           event: "real_execution_blocked",
@@ -562,11 +613,36 @@ export async function installMockApi(
           blocked: true,
           hosts,
           blocked_hosts: hosts,
-          reasons: ["REAL_ANSIBLE_ENABLED=false"],
+          reasons: [
+            `Host count ${hosts.length} exceeds REAL_ANSIBLE_MAX_HOSTS_PER_RUN=${state.maxHostsPerRun}`,
+          ],
           stdout: "",
-          stderr: "REAL_ANSIBLE_ENABLED=false",
+          stderr: "max hosts exceeded",
           mock_mode: true,
-          real_ansible_enabled: false,
+          real_ansible_enabled: state.realAnsibleEnabled,
+        });
+      }
+      if (!state.realAnsibleEnabled || !state.pilotReady) {
+        pushAudit(state, {
+          action: "connectivity_check",
+          event: "real_execution_blocked",
+          job_id: 0,
+          task_code: "",
+          old_status: null,
+          new_status: null,
+        });
+        return json(route, 200, {
+          ok: false,
+          blocked: true,
+          hosts,
+          blocked_hosts: hosts,
+          reasons: state.pilotReady
+            ? ["REAL_ANSIBLE_ENABLED=false"]
+            : ["REAL_ANSIBLE_PILOT_MODE=false — single-host lab pilot disabled"],
+          stdout: "",
+          stderr: "blocked",
+          mock_mode: true,
+          real_ansible_enabled: state.realAnsibleEnabled,
         });
       }
       return json(route, 200, {
