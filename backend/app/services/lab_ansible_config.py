@@ -49,6 +49,19 @@ def max_hosts_per_run(settings: Settings) -> int:
     return max(1, min(5, n))
 
 
+def resolve_auth_mode(settings: Settings) -> str:
+    """Return normalized auth mode: explicit | ssh_config (default explicit)."""
+    if hasattr(settings, "real_ansible_auth_mode_normalized"):
+        return settings.real_ansible_auth_mode_normalized
+    mode = str(getattr(settings, "real_ansible_auth_mode", "explicit") or "explicit")
+    mode = mode.strip().lower()
+    return mode if mode in {"explicit", "ssh_config"} else "explicit"
+
+
+def uses_explicit_auth(settings: Settings) -> bool:
+    return resolve_auth_mode(settings) == "explicit"
+
+
 @dataclass
 class LabConfigPreview:
     """Sanitized lab pilot config — no secrets / key contents."""
@@ -70,6 +83,8 @@ class LabConfigPreview:
     max_hosts_per_run: int = 1
     pilot_ready: bool = False
     pilot_readiness_errors: list[str] = field(default_factory=list)
+    auth_mode: str = "explicit"
+    auth_source: str = "explicit"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +104,8 @@ class LabConfigPreview:
             "max_hosts_per_run": self.max_hosts_per_run,
             "pilot_ready": self.pilot_ready,
             "pilot_readiness_errors": list(self.pilot_readiness_errors),
+            "auth_mode": self.auth_mode,
+            "auth_source": self.auth_source,
         }
 
 
@@ -105,6 +122,8 @@ class PilotReadiness:
     inventory_configured: bool = False
     remote_user_configured: bool = False
     private_key_configured: bool = False
+    auth_mode: str = "explicit"
+    auth_source: str = "explicit"
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -121,6 +140,8 @@ class PilotReadiness:
             "inventory_configured": self.inventory_configured,
             "remote_user_configured": self.remote_user_configured,
             "private_key_configured": self.private_key_configured,
+            "auth_mode": self.auth_mode,
+            "auth_source": self.auth_source,
             "errors": list(self.errors),
             "warnings": list(self.warnings),
         }
@@ -148,6 +169,8 @@ def build_lab_config_preview(
     )
     max_hosts = max_hosts_per_run(settings)
     pilot_mode = bool(getattr(settings, "real_ansible_pilot_mode", False))
+    auth_mode = resolve_auth_mode(settings)
+    explicit_auth = auth_mode == "explicit"
 
     inv_configured = inventory_is_configured(settings)
     key_configured = private_key_is_configured(settings)
@@ -181,16 +204,17 @@ def build_lab_config_preview(
                 "REAL_ANSIBLE_INVENTORY_PATH missing or file not found "
                 "(required when REAL_ANSIBLE_ENABLED=true)"
             )
-        if not user_configured:
-            errors.append(
-                "REAL_ANSIBLE_REMOTE_USER missing "
-                "(required when REAL_ANSIBLE_ENABLED=true)"
-            )
-        if not key_configured:
-            errors.append(
-                "REAL_ANSIBLE_PRIVATE_KEY_PATH missing or file not found "
-                "(key-based auth required for lab pilot)"
-            )
+        if explicit_auth:
+            if not user_configured:
+                errors.append(
+                    "REAL_ANSIBLE_REMOTE_USER missing "
+                    "(required when REAL_ANSIBLE_AUTH_MODE=explicit)"
+                )
+            if not key_configured:
+                errors.append(
+                    "REAL_ANSIBLE_PRIVATE_KEY_PATH missing or file not found "
+                    "(required when REAL_ANSIBLE_AUTH_MODE=explicit)"
+                )
         if settings.mock_mode:
             errors.append(
                 "MOCK_MODE=true — real connectivity remains blocked "
@@ -208,20 +232,20 @@ def build_lab_config_preview(
         or e.startswith("Unknown task_code")
         or "out of bounds" in e
         or "INVENTORY_PATH missing" in e
-        or "REMOTE_USER missing" in e
-        or "PRIVATE_KEY_PATH missing" in e
+        or (explicit_auth and "REMOTE_USER missing" in e)
+        or (explicit_auth and "PRIVATE_KEY_PATH missing" in e)
         or "is empty" in e
         or ("MOCK_MODE=true" in e and settings.real_ansible_enabled)
     ]
 
+    auth_ok = (not explicit_auth) or (user_configured and key_configured)
     base_connectivity_ok = (
         (not settings.mock_mode)
         and bool(settings.real_ansible_enabled)
         and bool(hosts)
         and bool(codes)
         and inv_configured
-        and user_configured
-        and key_configured
+        and auth_ok
         and not hard_failures
     )
 
@@ -272,11 +296,11 @@ def build_lab_config_preview(
             msg = "Inventory not configured — pilot not ready"
             if msg not in pilot_errors:
                 pilot_errors.append(msg)
-        if not user_configured:
+        if explicit_auth and not user_configured:
             msg = "Remote user not configured — pilot not ready"
             if msg not in pilot_errors:
                 pilot_errors.append(msg)
-        if not key_configured:
+        if explicit_auth and not key_configured:
             msg = "Private key not configured — pilot not ready"
             if msg not in pilot_errors:
                 pilot_errors.append(msg)
@@ -320,6 +344,8 @@ def build_lab_config_preview(
         max_hosts_per_run=max_hosts,
         pilot_ready=pilot_ready,
         pilot_readiness_errors=pilot_errors,
+        auth_mode=auth_mode,
+        auth_source=auth_mode,
     )
 
 
@@ -341,6 +367,11 @@ def build_pilot_readiness(
     if preview.check_mode_only:
         warnings.append(
             "Check-mode only — real apply/run remains blocked in Phase 10C"
+        )
+    if preview.auth_mode == "ssh_config":
+        warnings.append(
+            "Auth mode ssh_config — using system SSH config / inventory / agent "
+            "(user/key CLI args are not injected)"
         )
     if len(preview.allowed_hosts) > preview.max_hosts_per_run:
         warnings.append(
@@ -369,6 +400,8 @@ def build_pilot_readiness(
         inventory_configured=bool(preview.inventory_path_configured),
         remote_user_configured=bool(preview.remote_user_configured),
         private_key_configured=bool(preview.private_key_configured),
+        auth_mode=preview.auth_mode,
+        auth_source=preview.auth_source,
         errors=errors,
         warnings=warnings,
     )
@@ -438,4 +471,6 @@ __all__ = [
     "parse_csv_allowlist",
     "private_key_is_configured",
     "remote_user_is_configured",
+    "resolve_auth_mode",
+    "uses_explicit_auth",
 ]

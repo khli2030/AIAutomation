@@ -218,6 +218,30 @@ export default function SafetyAnsiblePage() {
                 </div>
               </div>
               <div className="stat">
+                <div className="label">AUTH_MODE</div>
+                <div className="value" data-testid="safety-auth-mode">
+                  {status.auth_mode ?? "explicit"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">AUTH_SOURCE</div>
+                <div className="value" data-testid="safety-auth-source">
+                  {status.auth_source ?? status.auth_mode ?? "explicit"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">remote_user_configured</div>
+                <div className="value" data-testid="safety-remote-user-configured">
+                  {String(status.remote_user_configured)}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">private_key_configured</div>
+                <div className="value" data-testid="safety-private-key-configured">
+                  {String(status.private_key_configured)}
+                </div>
+              </div>
+              <div className="stat">
                 <div className="label">real execution available</div>
                 <div
                   className="value"
@@ -303,6 +327,18 @@ export default function SafetyAnsiblePage() {
                 <div className="label">connectivity allowed</div>
                 <div className="value">
                   {String(lab.connectivity_allowed)}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">auth_mode</div>
+                <div className="value" data-testid="lab-auth-mode">
+                  {lab.auth_mode ?? "explicit"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">auth_source</div>
+                <div className="value" data-testid="lab-auth-source">
+                  {lab.auth_source ?? lab.auth_mode ?? "explicit"}
                 </div>
               </div>
             </div>

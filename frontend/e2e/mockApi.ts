@@ -550,6 +550,8 @@ export async function installMockApi(
         pilot_mode: state.pilotMode,
         max_hosts_per_run: state.maxHostsPerRun,
         single_host_pilot_qualified: state.pilotReady,
+        auth_mode: "explicit",
+        auth_source: "explicit",
       });
     }
 
@@ -573,6 +575,8 @@ export async function installMockApi(
         max_hosts_per_run: state.maxHostsPerRun,
         pilot_ready: state.pilotReady,
         pilot_readiness_errors: state.pilotReady ? [] : state.pilotErrors,
+        auth_mode: "explicit",
+        auth_source: "explicit",
       });
     }
 
@@ -591,6 +595,8 @@ export async function installMockApi(
         inventory_configured: state.realExecutionAvailable,
         remote_user_configured: state.realExecutionAvailable,
         private_key_configured: state.realExecutionAvailable,
+        auth_mode: "explicit",
+        auth_source: "explicit",
         errors: state.pilotReady ? [] : state.pilotErrors,
         warnings: state.pilotWarnings,
       });

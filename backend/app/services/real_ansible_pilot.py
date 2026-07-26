@@ -39,6 +39,7 @@ from app.services.lab_ansible_config import (
     build_lab_config_preview,
     lab_config_blocks_real_execution,
     max_hosts_per_run,
+    resolve_auth_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,8 @@ class AnsibleSafetyStatus:
     pilot_mode: bool = False
     max_hosts_per_run: int = 1
     single_host_pilot_qualified: bool = False
+    auth_mode: str = "explicit"
+    auth_source: str = "explicit"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +102,8 @@ class AnsibleSafetyStatus:
             "pilot_mode": self.pilot_mode,
             "max_hosts_per_run": self.max_hosts_per_run,
             "single_host_pilot_qualified": self.single_host_pilot_qualified,
+            "auth_mode": self.auth_mode,
+            "auth_source": self.auth_source,
         }
 
 
@@ -275,6 +280,8 @@ def build_safety_status(
         pilot_mode=bool(preview.pilot_mode),
         max_hosts_per_run=int(preview.max_hosts_per_run),
         single_host_pilot_qualified=single_host_qualified,
+        auth_mode=preview.auth_mode,
+        auth_source=preview.auth_source,
     )
 
 
@@ -892,6 +899,7 @@ class RealAnsiblePilotService:
 
         import ansible_runner  # noqa: PLC0415
 
+        auth_mode = resolve_auth_mode(self.settings)
         run_kwargs: dict[str, Any] = {
             "private_data_dir": str(private_data_dir),
             "host_pattern": ",".join(hosts),
@@ -904,22 +912,27 @@ class RealAnsiblePilotService:
                 ),
             },
         }
-        remote_user = (self.settings.real_ansible_remote_user or "").strip()
-        if remote_user:
-            run_kwargs["cmdline"] = f"--user {remote_user}"
-        private_key = (self.settings.real_ansible_private_key_path or "").strip()
-        if private_key:
-            extra = f"--private-key {private_key}"
-            run_kwargs["cmdline"] = (
-                f"{run_kwargs.get('cmdline', '')} {extra}".strip()
-            )
+        # ssh_config mode: rely on inventory / SSH config / agent — never inject
+        # --user or --private-key. Explicit mode injects configured identity.
+        if auth_mode == "explicit":
+            remote_user = (self.settings.real_ansible_remote_user or "").strip()
+            if remote_user:
+                run_kwargs["cmdline"] = f"--user {remote_user}"
+            private_key = (self.settings.real_ansible_private_key_path or "").strip()
+            if private_key:
+                extra = f"--private-key {private_key}"
+                run_kwargs["cmdline"] = (
+                    f"{run_kwargs.get('cmdline', '')} {extra}".strip()
+                )
         timeout = int(self.settings.real_ansible_timeout_seconds or 120)
         run_kwargs["timeout"] = timeout
 
         logger.info(
-            "Phase 10A connectivity ping: hosts=%s inventory=%s (no playbook apply)",
+            "Phase 10C connectivity ping: hosts=%s inventory=%s auth_mode=%s "
+            "(no playbook apply)",
             hosts,
             inventory_path,
+            auth_mode,
         )
         runner = ansible_runner.run(**run_kwargs)
         status = str(getattr(runner, "status", "unknown") or "unknown")
@@ -988,13 +1001,16 @@ class RealAnsiblePilotService:
 
         import ansible_runner  # noqa: PLC0415
 
+        auth_mode = resolve_auth_mode(self.settings)
         cmdline_parts = ["--check"]
-        remote_user = (self.settings.real_ansible_remote_user or "").strip()
-        if remote_user:
-            cmdline_parts.extend(["--user", remote_user])
-        private_key = (self.settings.real_ansible_private_key_path or "").strip()
-        if private_key:
-            cmdline_parts.extend(["--private-key", private_key])
+        # ssh_config: do not inject user/key — inventory/SSH config/agent only.
+        if auth_mode == "explicit":
+            remote_user = (self.settings.real_ansible_remote_user or "").strip()
+            if remote_user:
+                cmdline_parts.extend(["--user", remote_user])
+            private_key = (self.settings.real_ansible_private_key_path or "").strip()
+            if private_key:
+                cmdline_parts.extend(["--private-key", private_key])
         cmdline = " ".join(cmdline_parts)
 
         run_kwargs: dict[str, Any] = {
@@ -1013,12 +1029,13 @@ class RealAnsiblePilotService:
         }
 
         logger.info(
-            "Phase 10A real dry-run: job_id=%s playbook=%s limit=%s cmdline=%s "
-            "(check mode; catalog only; no Excel/AI)",
+            "Phase 10C real dry-run: job_id=%s playbook=%s limit=%s cmdline=%s "
+            "auth_mode=%s (check mode; catalog only; no Excel/AI)",
             job.id,
             playbook_path,
             limit_hosts,
             cmdline,
+            auth_mode,
         )
         if "--check" not in cmdline:
             raise RealAnsiblePilotError(

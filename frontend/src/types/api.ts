@@ -147,6 +147,8 @@ export type AnsibleSafetyStatus = {
   pilot_mode?: boolean;
   max_hosts_per_run?: number;
   single_host_pilot_qualified?: boolean;
+  auth_mode?: string;
+  auth_source?: string;
 };
 
 export type LabConfigPreview = {
@@ -166,6 +168,8 @@ export type LabConfigPreview = {
   max_hosts_per_run?: number;
   pilot_ready?: boolean;
   pilot_readiness_errors?: string[];
+  auth_mode?: string;
+  auth_source?: string;
 };
 
 export type PilotReadiness = {
@@ -180,6 +184,8 @@ export type PilotReadiness = {
   inventory_configured: boolean;
   remote_user_configured: boolean;
   private_key_configured: boolean;
+  auth_mode?: string;
+  auth_source?: string;
   errors: string[];
   warnings: string[];
 };

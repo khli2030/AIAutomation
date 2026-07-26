@@ -23,6 +23,9 @@ See operator guide: [`docs/real-ansible-lab-pilot.md`](real-ansible-lab-pilot.md
 - Connectivity + real dry-run enforce max hosts
 - Safety UI Pilot Readiness panel
 - Plan Detail single-host real dry-run label + host-count gate
+- `REAL_ANSIBLE_AUTH_MODE=explicit|ssh_config` (default `explicit`)
+  - `ssh_config`: no remote user / private key required; do not inject CLI auth args
+  - `explicit`: keep requiring remote user + private key when enabled
 
 ## Explicitly out of scope
 

@@ -38,6 +38,8 @@ class AnsibleSafetyStatusResponse(BaseModel):
     pilot_mode: bool = False
     max_hosts_per_run: int = 1
     single_host_pilot_qualified: bool = False
+    auth_mode: str = "explicit"
+    auth_source: str = "explicit"
 
 
 class ConnectivityCheckRequest(BaseModel):
@@ -77,6 +79,8 @@ class LabConfigPreviewResponse(BaseModel):
     max_hosts_per_run: int = 1
     pilot_ready: bool = False
     pilot_readiness_errors: list[str] = Field(default_factory=list)
+    auth_mode: str = "explicit"
+    auth_source: str = "explicit"
 
 
 class PilotReadinessResponse(BaseModel):
@@ -91,5 +95,7 @@ class PilotReadinessResponse(BaseModel):
     inventory_configured: bool = False
     remote_user_configured: bool = False
     private_key_configured: bool = False
+    auth_mode: str = "explicit"
+    auth_source: str = "explicit"
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

@@ -14,6 +14,7 @@ This does **not** enable production execution or real apply/remediation.
 | `REAL_ANSIBLE_CHECK_MODE_ONLY` | `true` |
 | `REAL_ANSIBLE_PILOT_MODE` | `false` |
 | `REAL_ANSIBLE_MAX_HOSTS_PER_RUN` | `1` |
+| `REAL_ANSIBLE_AUTH_MODE` | `explicit` |
 | `REAL_ANSIBLE_ALLOWED_HOSTS` | empty |
 | `REAL_ANSIBLE_ALLOWED_TASK_CODES` | empty |
 
@@ -44,7 +45,7 @@ cp .env.example .env
 # Edit .env on the lab control host — keep secrets out of git.
 ```
 
-For a controlled **single-host** lab pilot (still check-mode only):
+### Option A — explicit user/key (default)
 
 ```bash
 MOCK_MODE=false
@@ -52,6 +53,7 @@ REAL_ANSIBLE_ENABLED=true
 REAL_ANSIBLE_CHECK_MODE_ONLY=true
 REAL_ANSIBLE_PILOT_MODE=true
 REAL_ANSIBLE_MAX_HOSTS_PER_RUN=1
+REAL_ANSIBLE_AUTH_MODE=explicit
 APP_ENV=lab
 
 REAL_ANSIBLE_ALLOWED_HOSTS=lab-server-01
@@ -62,6 +64,34 @@ REAL_ANSIBLE_PRIVATE_KEY_PATH=/var/lib/compliance/keys/lab_id_ed25519
 REAL_ANSIBLE_REMOTE_USER=labuser
 REAL_ANSIBLE_TIMEOUT_SECONDS=120
 ```
+
+### Option B — SSH config / inventory / agent (control host already has SSH)
+
+Use when the Ansible control server already reaches lab hosts via `~/.ssh/config`,
+inventory `ansible_user` / `ansible_ssh_private_key_file`, or ssh-agent — without
+passing username/key on the CLI:
+
+```bash
+MOCK_MODE=false
+REAL_ANSIBLE_ENABLED=true
+REAL_ANSIBLE_CHECK_MODE_ONLY=true
+REAL_ANSIBLE_PILOT_MODE=true
+REAL_ANSIBLE_MAX_HOSTS_PER_RUN=1
+REAL_ANSIBLE_AUTH_MODE=ssh_config
+APP_ENV=lab
+
+REAL_ANSIBLE_ALLOWED_HOSTS=lab-server-01
+REAL_ANSIBLE_ALLOWED_TASK_CODES=AIDE_INSTALL,SSH_MAX_AUTH_TRIES
+
+REAL_ANSIBLE_INVENTORY_PATH=/var/lib/compliance/lab.ini
+# REMOTE_USER and PRIVATE_KEY_PATH are NOT required in ssh_config mode.
+# Leave them unset; the API will not inject --user / --private-key.
+REAL_ANSIBLE_TIMEOUT_SECONDS=120
+```
+
+In `ssh_config` mode, connectivity and real dry-run still require inventory,
+allowlists, pilot mode, check-mode-only, and max-hosts enforcement. They never
+expose private key contents in API responses.
 
 Copy the example inventory and edit locally:
 

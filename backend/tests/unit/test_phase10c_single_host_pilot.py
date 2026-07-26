@@ -103,6 +103,7 @@ def test_defaults_include_pilot_guards():
     assert s.real_ansible_check_mode_only is True
     assert s.real_ansible_pilot_mode is False
     assert s.real_ansible_max_hosts_per_run == 1
+    assert s.real_ansible_auth_mode == "explicit"
 
 
 def test_pilot_readiness_blocked_by_default():
