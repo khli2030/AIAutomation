@@ -53,3 +53,20 @@ class ConnectivityCheckResponse(BaseModel):
     real_ansible_enabled: bool = False
     execution_backend: str | None = None
     module: str | None = None
+
+
+class LabConfigPreviewResponse(BaseModel):
+    """Sanitized lab pilot config — never includes secrets or key contents."""
+
+    allowed_hosts: list[str] = Field(default_factory=list)
+    allowed_task_codes: list[str] = Field(default_factory=list)
+    inventory_path_configured: bool = False
+    private_key_configured: bool = False
+    remote_user_configured: bool = False
+    timeout_seconds: int = 120
+    validation_status: str
+    validation_errors: list[str] = Field(default_factory=list)
+    mock_mode: bool = True
+    real_ansible_enabled: bool = False
+    check_mode_only: bool = True
+    connectivity_allowed: bool = False

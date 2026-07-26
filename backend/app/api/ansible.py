@@ -1,7 +1,7 @@
-"""Ansible readiness + Phase 10A pilot safety endpoints.
+"""Ansible readiness + Phase 10A/10B pilot safety endpoints.
 
-GET /preflight and GET /safety-status never execute Ansible.
-POST /connectivity-check is gated and blocked by default.
+GET /preflight, /safety-status, /lab-config-preview never execute Ansible.
+POST /connectivity-check is gated and blocked by default (ping only).
 """
 
 from __future__ import annotations
@@ -19,9 +19,11 @@ from app.schemas.ansible import (
     AnsibleSafetyStatusResponse,
     ConnectivityCheckRequest,
     ConnectivityCheckResponse,
+    LabConfigPreviewResponse,
     PreflightCheckResponse,
 )
 from app.services.ansible_safety import build_preflight_report
+from app.services.lab_ansible_config import build_lab_config_preview
 from app.services.real_ansible_pilot import (
     RealAnsiblePilotError,
     RealAnsiblePilotService,
@@ -31,17 +33,17 @@ from app.services.real_ansible_pilot import (
 router = APIRouter()
 
 
+def _known_task_codes(db: Session) -> list[str]:
+    return list(db.scalars(select(RemediationCatalog.task_code)).all())
+
+
 @router.get("/preflight", response_model=AnsiblePreflightResponse)
 def ansible_preflight(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     auth: AuthContext = require_roles(*READ_ROLES),
 ) -> AnsiblePreflightResponse:
-    """Report real-Ansible readiness without executing anything.
-
-    Real Ansible remains blocked unless MOCK_MODE=false, REAL_ANSIBLE_ENABLED=true,
-    and APP_ENV is lab|test. Production stays blocked in Phase 8B.
-    """
+    """Report real-Ansible readiness without executing anything."""
     _ = auth
     enabled_paths = db.scalars(
         select(RemediationCatalog.ansible_playbook_path).where(
@@ -63,13 +65,30 @@ def ansible_preflight(
 
 @router.get("/safety-status", response_model=AnsibleSafetyStatusResponse)
 def ansible_safety_status(
+    db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
     auth: AuthContext = require_roles(*READ_ROLES),
 ) -> AnsibleSafetyStatusResponse:
-    """Phase 10A safety status — configuration only, never executes Ansible."""
+    """Phase 10A/10B safety status — configuration only, never executes Ansible."""
     _ = auth
-    status_obj = build_safety_status(settings)
+    status_obj = build_safety_status(
+        settings, known_task_codes=_known_task_codes(db)
+    )
     return AnsibleSafetyStatusResponse(**status_obj.to_dict())
+
+
+@router.get("/lab-config-preview", response_model=LabConfigPreviewResponse)
+def ansible_lab_config_preview(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    auth: AuthContext = require_roles(*READ_ROLES),
+) -> LabConfigPreviewResponse:
+    """Sanitized lab pilot config preview — no secrets or private key contents."""
+    _ = auth
+    preview = build_lab_config_preview(
+        settings, known_task_codes=_known_task_codes(db)
+    )
+    return LabConfigPreviewResponse(**preview.to_dict())
 
 
 @router.post("/connectivity-check", response_model=ConnectivityCheckResponse)
@@ -79,11 +98,17 @@ def ansible_connectivity_check(
     settings: Settings = Depends(get_settings),
     auth: AuthContext = require_roles(*OPERATOR_ROLES),
 ) -> ConnectivityCheckResponse:
-    """Allowlisted host connectivity check (ping). Blocked when real Ansible is off."""
+    """Allowlisted host connectivity check (ping). Blocked when real Ansible is off.
+
+    Never runs playbooks or applies changes.
+    """
     service = RealAnsiblePilotService(db, settings=settings)
     try:
         result = service.connectivity_check(
-            body.hosts, actor=auth.actor, role=auth.role.value
+            body.hosts,
+            actor=auth.actor,
+            role=auth.role.value,
+            known_task_codes=_known_task_codes(db),
         )
     except RealAnsiblePilotError as exc:
         raise HTTPException(

@@ -146,6 +146,21 @@ export type AnsibleSafetyStatus = {
   timeout_seconds?: number;
 };
 
+export type LabConfigPreview = {
+  allowed_hosts: string[];
+  allowed_task_codes: string[];
+  inventory_path_configured: boolean;
+  private_key_configured: boolean;
+  remote_user_configured: boolean;
+  timeout_seconds: number;
+  validation_status: string;
+  validation_errors: string[];
+  mock_mode: boolean;
+  real_ansible_enabled: boolean;
+  check_mode_only: boolean;
+  connectivity_allowed: boolean;
+};
+
 export type JobExecutionSummary = {
   job_id: number;
   mode: string;

@@ -274,7 +274,10 @@ def test_real_dry_run_uses_check_mode_only(tmp_path):
     (playbooks / "ssh_disable_root_login.yml").write_text("---\n")
     inventories = tmp_path / "inventories"
     inventories.mkdir()
-    (inventories / "test.ini").write_text("e2e-linux-01 ansible_host=10.0.0.1\n")
+    inv = inventories / "lab.ini"
+    inv.write_text("e2e-linux-01 ansible_host=10.0.0.1\n")
+    key = tmp_path / "lab_key"
+    key.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nlab-test-only\n")
 
     settings = _settings(
         mock_mode=False,
@@ -283,6 +286,9 @@ def test_real_dry_run_uses_check_mode_only(tmp_path):
         real_ansible_check_mode_only=True,
         real_ansible_allowed_hosts="e2e-linux-01",
         real_ansible_allowed_task_codes="SSH_DISABLE_ROOT_LOGIN",
+        real_ansible_inventory_path=str(inv),
+        real_ansible_private_key_path=str(key),
+        real_ansible_remote_user="labuser",
         ansible_playbooks_dir=str(playbooks),
         ansible_inventories_dir=str(inventories),
         runner_private_data_dir=str(tmp_path / "runner"),
@@ -507,7 +513,10 @@ def test_audit_event_created_for_real_dry_run_success(tmp_path):
     (playbooks / "ssh_disable_root_login.yml").write_text("---\n")
     inventories = tmp_path / "inventories"
     inventories.mkdir()
-    (inventories / "test.ini").write_text("e2e-linux-01 ansible_host=10.0.0.1\n")
+    inv = inventories / "lab.ini"
+    inv.write_text("e2e-linux-01 ansible_host=10.0.0.1\n")
+    key = tmp_path / "lab_key"
+    key.write_text("-----BEGIN OPENSSH PRIVATE KEY-----\nlab-test-only\n")
 
     settings = _settings(
         mock_mode=False,
@@ -515,6 +524,9 @@ def test_audit_event_created_for_real_dry_run_success(tmp_path):
         app_env="lab",
         real_ansible_allowed_hosts="e2e-linux-01",
         real_ansible_allowed_task_codes="SSH_DISABLE_ROOT_LOGIN",
+        real_ansible_inventory_path=str(inv),
+        real_ansible_private_key_path=str(key),
+        real_ansible_remote_user="labuser",
         ansible_playbooks_dir=str(playbooks),
         ansible_inventories_dir=str(inventories),
         runner_private_data_dir=str(tmp_path / "runner"),

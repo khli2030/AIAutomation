@@ -15,6 +15,7 @@ import type {
   ImportBatch,
   JobExecutionSummary,
   JobResult,
+  LabConfigPreview,
   Paginated,
   PlanAuditEvent,
   PlanExecutionSummary,
@@ -321,6 +322,10 @@ export async function realDryRunJob(
 
 export async function getAnsibleSafetyStatus(): Promise<AnsibleSafetyStatus> {
   return apiFetch("/ansible/safety-status");
+}
+
+export async function getLabConfigPreview(): Promise<LabConfigPreview> {
+  return apiFetch("/ansible/lab-config-preview");
 }
 
 export async function postConnectivityCheck(

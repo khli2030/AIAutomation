@@ -35,6 +35,10 @@ from app.services.ansible_safety import (
     resolve_playbook_path,
 )
 from app.services.audit import write_audit_log
+from app.services.lab_ansible_config import (
+    build_lab_config_preview,
+    lab_config_blocks_real_execution,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -98,52 +102,52 @@ def can_execute_real_ansible(
     task_code: str | None,
     mode: str,
     catalog: RemediationCatalog | None = None,
+    known_task_codes: list[str] | None = None,
 ) -> RealAnsibleGateResult:
-    """Strict Phase 10A gate — all conditions must pass for allowed=True."""
+    """Strict Phase 10A/10B gate — all conditions must pass for allowed=True."""
     reasons: list[str] = []
     code: str | None = None
     mode_norm = (mode or "").strip().lower()
 
+    require_task = mode_norm != "connectivity"
+    lab_reasons = lab_config_blocks_real_execution(
+        settings,
+        known_task_codes=known_task_codes,
+        host=host,
+        task_code=task_code if require_task else None,
+        require_task_code=require_task,
+    )
+    # Filter safe-default noise when evaluating a specific host for connectivity:
+    # keep concrete blockers (empty allowlist, missing inventory when enabled, etc.).
+    for r in lab_reasons:
+        if r not in reasons:
+            reasons.append(r)
     if settings.mock_mode:
-        reasons.append("MOCK_MODE=true — real Ansible remote execution is disabled")
         code = code or "mock_mode"
-
     if not settings.real_ansible_enabled:
-        reasons.append("REAL_ANSIBLE_ENABLED=false")
         code = code or "real_ansible_disabled"
-
-    allowed_hosts = set(settings.real_ansible_allowed_hosts_list)
-    if not allowed_hosts:
-        reasons.append("REAL_ANSIBLE_ALLOWED_HOSTS is empty (no hosts allowlisted)")
+    if any("is empty" in r and "HOSTS" in r for r in lab_reasons):
         code = code or "allowed_hosts_empty"
-    elif host is not None:
-        host_key = host.strip()
-        if host_key not in allowed_hosts:
-            reasons.append(
-                f"host {host_key!r} is not in REAL_ANSIBLE_ALLOWED_HOSTS"
-            )
-            code = code or "host_not_allowlisted"
-
-    allowed_codes = set(settings.real_ansible_allowed_task_codes_list)
-    if mode_norm != "connectivity":
-        if not allowed_codes:
-            reasons.append(
-                "REAL_ANSIBLE_ALLOWED_TASK_CODES is empty (no task codes allowlisted)"
-            )
-            code = code or "allowed_task_codes_empty"
-        elif task_code is not None:
-            tc = task_code.strip()
-            if tc not in allowed_codes:
-                reasons.append(
-                    f"task_code {tc!r} is not in REAL_ANSIBLE_ALLOWED_TASK_CODES"
-                )
-                code = code or "task_code_not_allowlisted"
+    if any("is empty" in r and "TASK_CODES" in r for r in lab_reasons):
+        code = code or "allowed_task_codes_empty"
+    if any("not in REAL_ANSIBLE_ALLOWED_HOSTS" in r for r in lab_reasons):
+        code = code or "host_not_allowlisted"
+    if any("not in REAL_ANSIBLE_ALLOWED_TASK_CODES" in r for r in lab_reasons):
+        code = code or "task_code_not_allowlisted"
+    if any("INVENTORY_PATH missing" in r for r in lab_reasons):
+        code = code or "inventory_missing"
+    if any("REMOTE_USER missing" in r for r in lab_reasons):
+        code = code or "remote_user_missing"
+    if any("PRIVATE_KEY_PATH missing" in r for r in lab_reasons):
+        code = code or "private_key_missing"
+    if any("Unknown task_code" in r for r in lab_reasons):
+        code = code or "unknown_task_code"
 
     if mode_norm in REAL_APPLY_MODES:
         if settings.real_ansible_check_mode_only:
             reasons.append(
                 "REAL_ANSIBLE_CHECK_MODE_ONLY=true — real apply/run is blocked "
-                "(check-mode / dry-run only in Phase 10A)"
+                "(check-mode / dry-run only in Phase 10A/10B)"
             )
             code = code or "check_mode_only"
         job_status = getattr(job, "status", None) if job is not None else None
@@ -187,81 +191,63 @@ def can_execute_real_ansible(
                     code = code or getattr(exc, "code", "playbook_missing")
 
     # Explicit non-use guarantees surfaced in gate result for audits/UI.
-    # (These are always true for this code path — listed when blocked for clarity.)
     if reasons:
-        reasons.append("used_remediation_text=false (never executed)")
-        reasons.append("used_ai_generated_playbook=false (never executed)")
+        if "used_remediation_text=false (never executed)" not in reasons:
+            reasons.append("used_remediation_text=false (never executed)")
+        if "used_ai_generated_playbook=false (never executed)" not in reasons:
+            reasons.append("used_ai_generated_playbook=false (never executed)")
+
+    # Deduplicate
+    uniq: list[str] = []
+    for r in reasons:
+        if r not in uniq:
+            uniq.append(r)
+    reasons = uniq
 
     if reasons:
         return RealAnsibleGateResult(allowed=False, reasons=reasons, code=code)
     return RealAnsibleGateResult(allowed=True, reasons=[], code=None)
 
 
-def build_safety_status(settings: Settings) -> AnsibleSafetyStatus:
-    """Read-only Phase 10A safety status for operators."""
-    reasons: list[str] = []
-    hosts = settings.real_ansible_allowed_hosts_list
-    codes = settings.real_ansible_allowed_task_codes_list
-
-    inv_override = (settings.real_ansible_inventory_path or "").strip()
-    inventories_dir = Path(settings.ansible_inventories_dir)
-    inventory_configured = bool(inv_override) or (
-        inventories_dir.is_dir()
-        and any(inventories_dir.glob("*.ini"))
+def build_safety_status(
+    settings: Settings,
+    *,
+    known_task_codes: list[str] | None = None,
+) -> AnsibleSafetyStatus:
+    """Read-only Phase 10A/10B safety status for operators."""
+    preview = build_lab_config_preview(
+        settings, known_task_codes=known_task_codes
     )
-    private_key_configured = bool(
-        (settings.real_ansible_private_key_path or "").strip()
-    )
-    remote_user_configured = bool((settings.real_ansible_remote_user or "").strip())
-
-    if settings.mock_mode:
-        reasons.append("MOCK_MODE=true (safe default)")
-    if not settings.real_ansible_enabled:
-        reasons.append("REAL_ANSIBLE_ENABLED=false (safe default)")
-    if settings.real_ansible_check_mode_only:
-        reasons.append(
-            "REAL_ANSIBLE_CHECK_MODE_ONLY=true — apply/run remains blocked"
-        )
-    if not hosts:
-        reasons.append("No hosts in REAL_ANSIBLE_ALLOWED_HOSTS")
-    if not codes:
-        reasons.append("No task codes in REAL_ANSIBLE_ALLOWED_TASK_CODES")
-    if not inventory_configured:
-        reasons.append("Inventory not configured")
     runner_ok, runner_detail = ansible_runner_available()
+    reasons = list(preview.validation_errors)
+    if settings.real_ansible_check_mode_only:
+        note = "REAL_ANSIBLE_CHECK_MODE_ONLY=true — apply/run remains blocked"
+        if note not in reasons:
+            reasons.append(note)
     if not runner_ok:
         reasons.append(runner_detail)
 
-    # "Available" means pilot real check-mode *could* proceed if a job/host/code
-    # also passes can_execute_real_ansible — not that production apply is on.
-    real_execution_available = (
-        (not settings.mock_mode)
-        and bool(settings.real_ansible_enabled)
-        and bool(hosts)
-        and bool(codes)
-        and inventory_configured
-        and runner_ok
-    )
+    real_execution_available = bool(preview.connectivity_allowed) and runner_ok
     if real_execution_available:
         reasons = [
-            "Pilot real check-mode path is configured "
-            "(still allowlist + check-mode gated; apply remains blocked)"
+            "Lab pilot connectivity/check-mode path is configured "
+            "(allowlist + inventory + key + user gated; apply remains blocked)"
         ]
 
     return AnsibleSafetyStatus(
         mock_mode=bool(settings.mock_mode),
         real_ansible_enabled=bool(settings.real_ansible_enabled),
         check_mode_only=bool(settings.real_ansible_check_mode_only),
-        allowed_hosts_count=len(hosts),
-        allowed_task_codes_count=len(codes),
-        inventory_configured=inventory_configured,
-        private_key_configured=private_key_configured,
-        remote_user_configured=remote_user_configured,
+        allowed_hosts_count=len(preview.allowed_hosts),
+        allowed_task_codes_count=len(preview.allowed_task_codes),
+        inventory_configured=bool(preview.inventory_path_configured),
+        private_key_configured=bool(preview.private_key_configured),
+        remote_user_configured=bool(preview.remote_user_configured),
         real_execution_available=real_execution_available,
         reasons=reasons,
-        allowed_hosts=hosts,
-        allowed_task_codes=codes,
-        timeout_seconds=int(settings.real_ansible_timeout_seconds),
+        allowed_hosts=list(preview.allowed_hosts),
+        allowed_task_codes=list(preview.allowed_task_codes),
+        timeout_seconds=int(preview.timeout_seconds),
     )
 
 
@@ -303,7 +289,9 @@ class RealAnsiblePilotService:
         *,
         actor: str = "system",
         role: str | None = None,
+        known_task_codes: list[str] | None = None,
     ) -> dict[str, Any]:
+        """Allowlisted ping only — never runs playbooks or apply."""
         requested = [h.strip() for h in hosts if h and str(h).strip()]
         write_audit_log(
             self.db,
@@ -318,6 +306,8 @@ class RealAnsiblePilotService:
                 "mock_mode": bool(self.settings.mock_mode),
                 "real_ansible_enabled": bool(self.settings.real_ansible_enabled),
                 "check_mode_only": bool(self.settings.real_ansible_check_mode_only),
+                "playbook_executed": False,
+                "changes_applied": False,
             },
             commit=False,
         )
@@ -346,7 +336,7 @@ class RealAnsiblePilotService:
                 "real_ansible_enabled": bool(self.settings.real_ansible_enabled),
             }
 
-        # Gate each host (connectivity mode — task_code N/A).
+        # Gate each host (connectivity mode — task_code N/A; no playbooks).
         blocked_hosts: list[str] = []
         reasons: list[str] = []
         for host in requested:
@@ -357,13 +347,13 @@ class RealAnsiblePilotService:
                 task_code=None,
                 mode="connectivity",
                 catalog=None,
+                known_task_codes=known_task_codes,
             )
             if not gate.allowed:
                 blocked_hosts.append(host)
                 reasons.extend(gate.reasons)
 
         if blocked_hosts or reasons:
-            # Deduplicate reasons while preserving order.
             uniq: list[str] = []
             for r in reasons:
                 if r not in uniq:
