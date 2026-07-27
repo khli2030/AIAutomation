@@ -282,6 +282,7 @@ def test_real_dry_run_uses_check_mode_only(tmp_path):
     settings = _settings(
         mock_mode=False,
         real_ansible_enabled=True,
+        real_ansible_pilot_mode=True,
         app_env="lab",
         real_ansible_check_mode_only=True,
         real_ansible_allowed_hosts="e2e-linux-01",
@@ -521,6 +522,7 @@ def test_audit_event_created_for_real_dry_run_success(tmp_path):
     settings = _settings(
         mock_mode=False,
         real_ansible_enabled=True,
+        real_ansible_pilot_mode=True,
         app_env="lab",
         real_ansible_allowed_hosts="e2e-linux-01",
         real_ansible_allowed_task_codes="SSH_DISABLE_ROOT_LOGIN",

@@ -56,9 +56,12 @@ test.describe("Phase 10B lab inventory + connectivity", () => {
       page.getByRole("button", { name: /real apply|apply\/run|Run apply/i }),
     ).toHaveCount(0);
     const body = await page.locator("body").innerText();
+    // Secret material must never appear (labels like private_key_configured are OK).
     expect(body).not.toContain("BEGIN OPENSSH");
-    expect(body).not.toContain("PRIVATE KEY");
+    expect(body).not.toContain("BEGIN RSA PRIVATE KEY");
+    expect(body).not.toContain("BEGIN OPENSSH PRIVATE KEY");
     expect(body.toLowerCase()).not.toContain("/var/lib/compliance/keys");
+    await expect(page.getByTestId("lab-private-key-configured")).toBeVisible();
   });
 
   test("allowed hosts/task codes visible when lab pilot marked available", async ({

@@ -79,11 +79,20 @@ class Settings(BaseSettings):
     real_ansible_allowed_hosts: str = ""
     # Example: REAL_ANSIBLE_ALLOWED_TASK_CODES=AIDE_INSTALL,SSH_MAX_AUTH_TRIES
     real_ansible_allowed_task_codes: str = ""
-    # Lab pilot inventory / SSH identity (required when REAL_ANSIBLE_ENABLED=true).
+    # Lab pilot inventory / SSH identity.
+    # Auth mode:
+    #   explicit   — require REAL_ANSIBLE_REMOTE_USER + PRIVATE_KEY_PATH (default)
+    #   ssh_config — use system SSH config / inventory / agent; do not inject user/key
+    real_ansible_auth_mode: str = "explicit"
     real_ansible_inventory_path: str | None = None
     real_ansible_private_key_path: str | None = None
     real_ansible_remote_user: str | None = None
     real_ansible_timeout_seconds: int = TIMEOUT_DEFAULT_SECONDS
+
+    # Phase 10C single-host lab pilot guard (safe defaults).
+    # Pilot mode must be explicitly enabled; max hosts defaults to 1.
+    real_ansible_pilot_mode: bool = False
+    real_ansible_max_hosts_per_run: int = 1
 
     # AI Analyzer is interface-only until explicitly configured (mock by default).
     ai_provider: str = "mock"
@@ -106,6 +115,20 @@ class Settings(BaseSettings):
             return TIMEOUT_MAX_SECONDS
         return n
 
+    @field_validator("real_ansible_max_hosts_per_run", mode="before")
+    @classmethod
+    def _validate_max_hosts_per_run(cls, value: object) -> int:
+        """Single-host pilot default; clamp to [1, 5] for safety."""
+        try:
+            n = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 1
+        if n < 1:
+            return 1
+        if n > 5:
+            return 5
+        return n
+
     @field_validator(
         "real_ansible_inventory_path",
         "real_ansible_private_key_path",
@@ -119,6 +142,14 @@ class Settings(BaseSettings):
         text = str(value).strip()
         return text or None
 
+    @field_validator("real_ansible_auth_mode", mode="before")
+    @classmethod
+    def _normalize_auth_mode(cls, value: object) -> str:
+        text = str(value or "explicit").strip().lower()
+        if text in {"explicit", "ssh_config"}:
+            return text
+        return "explicit"
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -130,6 +161,11 @@ class Settings(BaseSettings):
     @property
     def real_ansible_allowed_task_codes_list(self) -> list[str]:
         return parse_csv_allowlist(self.real_ansible_allowed_task_codes)
+
+    @property
+    def real_ansible_auth_mode_normalized(self) -> str:
+        mode = (self.real_ansible_auth_mode or "explicit").strip().lower()
+        return mode if mode in {"explicit", "ssh_config"} else "explicit"
 
 
 @lru_cache

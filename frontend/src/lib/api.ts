@@ -17,6 +17,7 @@ import type {
   JobResult,
   LabConfigPreview,
   Paginated,
+  PilotReadiness,
   PlanAuditEvent,
   PlanExecutionSummary,
   RawImportRecord,
@@ -326,6 +327,10 @@ export async function getAnsibleSafetyStatus(): Promise<AnsibleSafetyStatus> {
 
 export async function getLabConfigPreview(): Promise<LabConfigPreview> {
   return apiFetch("/ansible/lab-config-preview");
+}
+
+export async function getPilotReadiness(): Promise<PilotReadiness> {
+  return apiFetch("/ansible/pilot-readiness");
 }
 
 export async function postConnectivityCheck(

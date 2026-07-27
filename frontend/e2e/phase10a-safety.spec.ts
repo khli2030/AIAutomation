@@ -56,7 +56,7 @@ test.describe("Phase 10A Safety / Ansible pilot", () => {
     await page.getByTestId("real-dry-run-1").click();
     await expect(
       page.getByText(
-        "This runs Ansible in check mode only on allowlisted hosts.",
+        "This will run Ansible check mode only on one allowlisted lab host. No changes should be applied.",
       ),
     ).toBeVisible();
     await page.getByRole("button", { name: "Run check-mode dry-run" }).click();

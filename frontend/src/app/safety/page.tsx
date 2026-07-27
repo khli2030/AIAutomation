@@ -1,13 +1,18 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   ApiError,
   getAnsibleSafetyStatus,
   getLabConfigPreview,
+  getPilotReadiness,
   postConnectivityCheck,
 } from "@/lib/api";
-import type { AnsibleSafetyStatus, LabConfigPreview } from "@/types/api";
+import type {
+  AnsibleSafetyStatus,
+  LabConfigPreview,
+  PilotReadiness,
+} from "@/types/api";
 import { ErrorBox, SuccessBox } from "@/components/Ui";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -15,25 +20,42 @@ export default function SafetyAnsiblePage() {
   const { auth } = useAuth();
   const [status, setStatus] = useState<AnsibleSafetyStatus | null>(null);
   const [lab, setLab] = useState<LabConfigPreview | null>(null);
+  const [pilot, setPilot] = useState<PilotReadiness | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [hostsInput, setHostsInput] = useState("");
   const [busy, setBusy] = useState(false);
 
   const canOperator = Boolean(auth?.can_dry_run);
+  const maxHosts =
+    pilot?.max_hosts_per_run ?? status?.max_hosts_per_run ?? lab?.max_hosts_per_run ?? 1;
+  const pilotReady = Boolean(pilot?.ready ?? lab?.pilot_ready);
   const connectivityEnabled = Boolean(
     canOperator &&
       status?.real_execution_available &&
-      lab?.connectivity_allowed,
+      lab?.connectivity_allowed &&
+      (status?.pilot_mode ?? pilot?.pilot_mode),
   );
 
+  const parsedHosts = useMemo(
+    () =>
+      hostsInput
+        .split(/[\s,]+/)
+        .map((h) => h.trim())
+        .filter(Boolean),
+    [hostsInput],
+  );
+  const tooManyHosts = parsedHosts.length > maxHosts;
+
   async function refresh() {
-    const [s, preview] = await Promise.all([
+    const [s, preview, readiness] = await Promise.all([
       getAnsibleSafetyStatus(),
       getLabConfigPreview(),
+      getPilotReadiness(),
     ]);
     setStatus(s);
     setLab(preview);
+    setPilot(readiness);
   }
 
   useEffect(() => {
@@ -54,15 +76,18 @@ export default function SafetyAnsiblePage() {
   }, []);
 
   async function onConnectivityCheck() {
-    const hosts = hostsInput
-      .split(/[\s,]+/)
-      .map((h) => h.trim())
-      .filter(Boolean);
+    if (tooManyHosts) {
+      setError(
+        `Single-host pilot allows at most ${maxHosts} host(s) per run. Remove extra hosts before checking.`,
+      );
+      setMessage(null);
+      return;
+    }
     setBusy(true);
     setError(null);
     setMessage(null);
     try {
-      const result = await postConnectivityCheck(hosts);
+      const result = await postConnectivityCheck(parsedHosts);
       if (result.blocked || !result.ok) {
         setError(
           (result.reasons || []).join("; ") ||
@@ -85,15 +110,81 @@ export default function SafetyAnsiblePage() {
       <div className="page-header">
         <h1>Safety / Ansible</h1>
         <p>
-          Phase 10B lab connectivity pilot. Defaults keep{" "}
-          <code>MOCK_MODE=true</code> and{" "}
-          <code>REAL_ANSIBLE_ENABLED=false</code>. Connectivity check only —
-          no real apply/run. Private key contents are never displayed. Excel
-          Remediation and AI drafts are never executed.
+          Phase 10C single-host lab pilot. Defaults keep{" "}
+          <code>MOCK_MODE=true</code>,{" "}
+          <code>REAL_ANSIBLE_ENABLED=false</code>, and{" "}
+          <code>REAL_ANSIBLE_PILOT_MODE=false</code>. Connectivity and real
+          dry-run are check-mode / ping only — no real apply/run. Private key
+          contents are never displayed. Excel Remediation and AI drafts are never
+          executed.
         </p>
       </div>
       <ErrorBox message={error} />
       <SuccessBox message={message} />
+
+      <div className="panel" data-testid="pilot-readiness-panel">
+        <h2>Pilot Readiness</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Single-host lab pilot gate. Connectivity and real dry-run stay blocked
+          until every check below is green.
+        </p>
+        {!pilot ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          <>
+            <div className="grid-stats">
+              <div className="stat">
+                <div className="label">pilot_ready</div>
+                <div className="value" data-testid="pilot-ready-badge">
+                  {pilotReady ? "true" : "false"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">max_hosts_per_run</div>
+                <div className="value" data-testid="max-hosts-per-run">
+                  {String(maxHosts)}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">pilot_mode</div>
+                <div className="value">{String(pilot.pilot_mode)}</div>
+              </div>
+              <div className="stat">
+                <div className="label">check_mode_only</div>
+                <div className="value">{String(pilot.check_mode_only)}</div>
+              </div>
+            </div>
+
+            <div
+              className="safety-note"
+              data-testid="max-host-warning"
+              style={{ marginTop: "0.75rem" }}
+            >
+              Single-host pilot enforces max_hosts_per_run={maxHosts}.
+              Connectivity checks and real dry-runs that target more hosts are
+              rejected. Never use production or critical hosts.
+            </div>
+
+            <h3 style={{ fontSize: "0.9rem" }}>Blocked reasons</h3>
+            <ul data-testid="pilot-blocked-reasons">
+              {(pilot.errors || []).length === 0 ? (
+                <li className="muted">(none)</li>
+              ) : (
+                pilot.errors.map((r) => <li key={r}>{r}</li>)
+              )}
+            </ul>
+
+            <h3 style={{ fontSize: "0.9rem" }}>Warnings</h3>
+            <ul data-testid="pilot-warnings">
+              {(pilot.warnings || []).length === 0 ? (
+                <li className="muted">(none)</li>
+              ) : (
+                pilot.warnings.map((w) => <li key={w}>{w}</li>)
+              )}
+            </ul>
+          </>
+        )}
+      </div>
 
       <div className="panel" data-testid="safety-status-panel">
         <h2>Real Ansible safety status</h2>
@@ -121,6 +212,36 @@ export default function SafetyAnsiblePage() {
                 </div>
               </div>
               <div className="stat">
+                <div className="label">PILOT_MODE</div>
+                <div className="value" data-testid="safety-pilot-mode">
+                  {String(status.pilot_mode ?? false)}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">AUTH_MODE</div>
+                <div className="value" data-testid="safety-auth-mode">
+                  {status.auth_mode ?? "explicit"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">AUTH_SOURCE</div>
+                <div className="value" data-testid="safety-auth-source">
+                  {status.auth_source ?? status.auth_mode ?? "explicit"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">remote_user_configured</div>
+                <div className="value" data-testid="safety-remote-user-configured">
+                  {String(status.remote_user_configured)}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">private_key_configured</div>
+                <div className="value" data-testid="safety-private-key-configured">
+                  {String(status.private_key_configured)}
+                </div>
+              </div>
+              <div className="stat">
                 <div className="label">real execution available</div>
                 <div
                   className="value"
@@ -128,6 +249,16 @@ export default function SafetyAnsiblePage() {
                   style={{ fontSize: "1rem" }}
                 >
                   {status.real_execution_available ? "YES" : "NO"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">single_host_pilot_qualified</div>
+                <div
+                  className="value"
+                  data-testid="safety-pilot-qualified"
+                  style={{ fontSize: "1rem" }}
+                >
+                  {status.single_host_pilot_qualified ? "YES" : "NO"}
                 </div>
               </div>
             </div>
@@ -159,6 +290,16 @@ export default function SafetyAnsiblePage() {
                 </div>
               </div>
               <div className="stat">
+                <div className="label">pilot_ready</div>
+                <div className="value" data-testid="lab-pilot-ready">
+                  {String(lab.pilot_ready ?? false)}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">max_hosts_per_run</div>
+                <div className="value">{String(lab.max_hosts_per_run ?? 1)}</div>
+              </div>
+              <div className="stat">
                 <div className="label">inventory configured</div>
                 <div className="value" data-testid="lab-inventory-configured">
                   {String(lab.inventory_path_configured)}
@@ -188,7 +329,29 @@ export default function SafetyAnsiblePage() {
                   {String(lab.connectivity_allowed)}
                 </div>
               </div>
+              <div className="stat">
+                <div className="label">auth_mode</div>
+                <div className="value" data-testid="lab-auth-mode">
+                  {lab.auth_mode ?? "explicit"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">auth_source</div>
+                <div className="value" data-testid="lab-auth-source">
+                  {lab.auth_source ?? lab.auth_mode ?? "explicit"}
+                </div>
+              </div>
             </div>
+            {(lab.pilot_readiness_errors || []).length > 0 ? (
+              <>
+                <h3 style={{ fontSize: "0.9rem" }}>Pilot readiness errors</h3>
+                <ul data-testid="lab-pilot-readiness-errors">
+                  {lab.pilot_readiness_errors!.map((e) => (
+                    <li key={e}>{e}</li>
+                  ))}
+                </ul>
+              </>
+            ) : null}
             <h3 style={{ fontSize: "0.9rem" }}>Allowed hosts</h3>
             <ul data-testid="lab-allowed-hosts">
               {(lab.allowed_hosts || []).length === 0 ? (
@@ -224,8 +387,8 @@ export default function SafetyAnsiblePage() {
       <div className="panel">
         <h2>Connectivity check (allowlisted hosts only)</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          Ping only. Disabled unless safety-status allows real connectivity. Never
-          runs playbooks or apply.
+          Ping only. At most {maxHosts} host(s) per run. Disabled unless pilot
+          readiness allows real connectivity. Never runs playbooks or apply.
         </p>
         <div className="field">
           <label htmlFor="conn-hosts">Hosts (comma or space separated)</label>
@@ -238,12 +401,18 @@ export default function SafetyAnsiblePage() {
             disabled={!connectivityEnabled}
           />
         </div>
+        {tooManyHosts ? (
+          <div className="safety-note" data-testid="connectivity-host-limit">
+            Too many hosts ({parsedHosts.length}). Max allowed per run:{" "}
+            {maxHosts}.
+          </div>
+        ) : null}
         <div className="btn-row">
           <button
             className="btn"
             type="button"
             data-testid="connectivity-check"
-            disabled={busy || !connectivityEnabled}
+            disabled={busy || !connectivityEnabled || tooManyHosts}
             onClick={() => void onConnectivityCheck()}
           >
             Run connectivity check
@@ -259,17 +428,17 @@ export default function SafetyAnsiblePage() {
         </div>
         {!connectivityEnabled ? (
           <div className="safety-note" data-testid="connectivity-disabled-note">
-            Connectivity check is disabled while real execution is unavailable.
-            See blocked reasons and validation errors above.
+            Connectivity check is disabled while pilot readiness / real execution
+            is unavailable. See Pilot Readiness blocked reasons above.
           </div>
         ) : null}
       </div>
 
-      {/* Explicitly no real apply/run controls in Phase 10B */}
+      {/* Explicitly no real apply/run controls in Phase 10C */}
       <div className="panel" data-testid="no-real-apply-panel">
         <h2>Real apply / run</h2>
         <p className="muted" style={{ margin: 0 }}>
-          Not available in Phase 10B. There is no real apply/run button and no
+          Not available in Phase 10C. There is no real apply/run button and no
           production execution path on this page.
         </p>
       </div>

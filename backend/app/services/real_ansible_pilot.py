@@ -38,6 +38,8 @@ from app.services.audit import write_audit_log
 from app.services.lab_ansible_config import (
     build_lab_config_preview,
     lab_config_blocks_real_execution,
+    max_hosts_per_run,
+    resolve_auth_mode,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,6 +77,12 @@ class AnsibleSafetyStatus:
     allowed_hosts: list[str] = field(default_factory=list)
     allowed_task_codes: list[str] = field(default_factory=list)
     timeout_seconds: int = 120
+    # Phase 10C
+    pilot_mode: bool = False
+    max_hosts_per_run: int = 1
+    single_host_pilot_qualified: bool = False
+    auth_mode: str = "explicit"
+    auth_source: str = "explicit"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +99,11 @@ class AnsibleSafetyStatus:
             "allowed_hosts": list(self.allowed_hosts),
             "allowed_task_codes": list(self.allowed_task_codes),
             "timeout_seconds": self.timeout_seconds,
+            "pilot_mode": self.pilot_mode,
+            "max_hosts_per_run": self.max_hosts_per_run,
+            "single_host_pilot_qualified": self.single_host_pilot_qualified,
+            "auth_mode": self.auth_mode,
+            "auth_source": self.auth_source,
         }
 
 
@@ -103,8 +116,9 @@ def can_execute_real_ansible(
     mode: str,
     catalog: RemediationCatalog | None = None,
     known_task_codes: list[str] | None = None,
+    host_count: int | None = None,
 ) -> RealAnsibleGateResult:
-    """Strict Phase 10A/10B gate — all conditions must pass for allowed=True."""
+    """Strict Phase 10A/10B/10C gate — all conditions must pass for allowed=True."""
     reasons: list[str] = []
     code: str | None = None
     mode_norm = (mode or "").strip().lower()
@@ -116,6 +130,7 @@ def can_execute_real_ansible(
         host=host,
         task_code=task_code if require_task else None,
         require_task_code=require_task,
+        host_count=host_count,
     )
     # Filter safe-default noise when evaluating a specific host for connectivity:
     # keep concrete blockers (empty allowlist, missing inventory when enabled, etc.).
@@ -142,6 +157,10 @@ def can_execute_real_ansible(
         code = code or "private_key_missing"
     if any("Unknown task_code" in r for r in lab_reasons):
         code = code or "unknown_task_code"
+    if any("PILOT_MODE=false" in r for r in lab_reasons):
+        code = code or "pilot_mode_disabled"
+    if any("exceeds REAL_ANSIBLE_MAX_HOSTS_PER_RUN" in r for r in lab_reasons):
+        code = code or "max_hosts_exceeded"
 
     if mode_norm in REAL_APPLY_MODES:
         if settings.real_ansible_check_mode_only:
@@ -214,12 +233,15 @@ def build_safety_status(
     *,
     known_task_codes: list[str] | None = None,
 ) -> AnsibleSafetyStatus:
-    """Read-only Phase 10A/10B safety status for operators."""
+    """Read-only Phase 10A/10B/10C safety status for operators."""
     preview = build_lab_config_preview(
         settings, known_task_codes=known_task_codes
     )
     runner_ok, runner_detail = ansible_runner_available()
     reasons = list(preview.validation_errors)
+    for err in preview.pilot_readiness_errors:
+        if err not in reasons:
+            reasons.append(err)
     if settings.real_ansible_check_mode_only:
         note = "REAL_ANSIBLE_CHECK_MODE_ONLY=true — apply/run remains blocked"
         if note not in reasons:
@@ -227,12 +249,19 @@ def build_safety_status(
     if not runner_ok:
         reasons.append(runner_detail)
 
-    real_execution_available = bool(preview.connectivity_allowed) and runner_ok
-    if real_execution_available:
+    single_host_qualified = bool(preview.pilot_ready) and runner_ok
+    real_execution_available = (
+        bool(preview.connectivity_allowed) and runner_ok and bool(preview.pilot_mode)
+    )
+    if single_host_qualified:
         reasons = [
-            "Lab pilot connectivity/check-mode path is configured "
-            "(allowlist + inventory + key + user gated; apply remains blocked)"
+            "Single-host lab pilot qualifies "
+            f"(max_hosts_per_run={preview.max_hosts_per_run}; "
+            "check-mode only; apply remains blocked)"
         ]
+    elif not preview.pilot_mode:
+        if "REAL_ANSIBLE_PILOT_MODE=false (safe default)" not in reasons:
+            reasons.append("REAL_ANSIBLE_PILOT_MODE=false (safe default)")
 
     return AnsibleSafetyStatus(
         mock_mode=bool(settings.mock_mode),
@@ -248,6 +277,11 @@ def build_safety_status(
         allowed_hosts=list(preview.allowed_hosts),
         allowed_task_codes=list(preview.allowed_task_codes),
         timeout_seconds=int(preview.timeout_seconds),
+        pilot_mode=bool(preview.pilot_mode),
+        max_hosts_per_run=int(preview.max_hosts_per_run),
+        single_host_pilot_qualified=single_host_qualified,
+        auth_mode=preview.auth_mode,
+        auth_source=preview.auth_source,
     )
 
 
@@ -336,6 +370,36 @@ class RealAnsiblePilotService:
                 "real_ansible_enabled": bool(self.settings.real_ansible_enabled),
             }
 
+        max_hosts = max_hosts_per_run(self.settings)
+        if len(requested) > max_hosts:
+            reasons = [
+                f"host count {len(requested)} exceeds "
+                f"REAL_ANSIBLE_MAX_HOSTS_PER_RUN={max_hosts}"
+            ]
+            self._audit_connectivity(
+                actor=actor,
+                role=role,
+                event="real_execution_blocked",
+                hosts=requested,
+                ok=False,
+                reasons=reasons,
+                stdout="",
+                stderr="; ".join(reasons),
+                blocked_hosts=requested,
+            )
+            return {
+                "ok": False,
+                "blocked": True,
+                "hosts": requested,
+                "blocked_hosts": requested,
+                "reasons": reasons,
+                "stdout": "",
+                "stderr": "; ".join(reasons),
+                "mock_mode": bool(self.settings.mock_mode),
+                "real_ansible_enabled": bool(self.settings.real_ansible_enabled),
+                "max_hosts_per_run": max_hosts,
+            }
+
         # Gate each host (connectivity mode — task_code N/A; no playbooks).
         blocked_hosts: list[str] = []
         reasons: list[str] = []
@@ -348,6 +412,7 @@ class RealAnsiblePilotService:
                 mode="connectivity",
                 catalog=None,
                 known_task_codes=known_task_codes,
+                host_count=len(requested),
             )
             if not gate.allowed:
                 blocked_hosts.append(host)
@@ -502,7 +567,22 @@ class RealAnsiblePilotService:
             )
             raise RealAnsiblePilotError(reason, code="missing_targets")
 
-        # Gate every target host + task_code.
+        max_hosts = max_hosts_per_run(self.settings)
+        if len(targets) > max_hosts:
+            reason = (
+                f"Real dry-run blocked: job has {len(targets)} targets; "
+                f"REAL_ANSIBLE_MAX_HOSTS_PER_RUN={max_hosts}"
+            )
+            self._audit_job_blocked(
+                job=job,
+                actor=actor,
+                role=role,
+                reason=reason,
+                code="max_hosts_exceeded",
+            )
+            raise RealAnsiblePilotError(reason, code="max_hosts_exceeded")
+
+        # Gate every target host + task_code (check-mode / catalog only).
         reasons: list[str] = []
         code: str | None = None
         for target in targets:
@@ -513,26 +593,18 @@ class RealAnsiblePilotService:
                 task_code=job.task_code,
                 mode="dry_run",
                 catalog=catalog,
+                host_count=len(targets),
             )
             if not gate.allowed:
                 reasons.extend(gate.reasons)
                 code = code or gate.code
 
-        # Also refuse apply modes via check_mode_only even if somehow requested.
+        # Phase 10C: endpoint is check-mode only; apply remains blocked.
         if not self.settings.real_ansible_check_mode_only:
-            # Phase 10A still forces check mode for this endpoint.
-            pass
-        check_gate = can_execute_real_ansible(
-            settings=self.settings,
-            job=job,
-            host=targets[0].device_name,
-            task_code=job.task_code,
-            mode="apply",
-            catalog=catalog,
-        )
-        # Document that apply is blocked under check_mode_only (do not fail dry-run
-        # solely because apply would be blocked — that's expected).
-        _ = check_gate
+            reasons.append(
+                "REAL_ANSIBLE_CHECK_MODE_ONLY=false — Phase 10C requires check-mode only"
+            )
+            code = code or "check_mode_required"
 
         if reasons:
             uniq: list[str] = []
@@ -827,6 +899,7 @@ class RealAnsiblePilotService:
 
         import ansible_runner  # noqa: PLC0415
 
+        auth_mode = resolve_auth_mode(self.settings)
         run_kwargs: dict[str, Any] = {
             "private_data_dir": str(private_data_dir),
             "host_pattern": ",".join(hosts),
@@ -839,22 +912,27 @@ class RealAnsiblePilotService:
                 ),
             },
         }
-        remote_user = (self.settings.real_ansible_remote_user or "").strip()
-        if remote_user:
-            run_kwargs["cmdline"] = f"--user {remote_user}"
-        private_key = (self.settings.real_ansible_private_key_path or "").strip()
-        if private_key:
-            extra = f"--private-key {private_key}"
-            run_kwargs["cmdline"] = (
-                f"{run_kwargs.get('cmdline', '')} {extra}".strip()
-            )
+        # ssh_config mode: rely on inventory / SSH config / agent — never inject
+        # --user or --private-key. Explicit mode injects configured identity.
+        if auth_mode == "explicit":
+            remote_user = (self.settings.real_ansible_remote_user or "").strip()
+            if remote_user:
+                run_kwargs["cmdline"] = f"--user {remote_user}"
+            private_key = (self.settings.real_ansible_private_key_path or "").strip()
+            if private_key:
+                extra = f"--private-key {private_key}"
+                run_kwargs["cmdline"] = (
+                    f"{run_kwargs.get('cmdline', '')} {extra}".strip()
+                )
         timeout = int(self.settings.real_ansible_timeout_seconds or 120)
         run_kwargs["timeout"] = timeout
 
         logger.info(
-            "Phase 10A connectivity ping: hosts=%s inventory=%s (no playbook apply)",
+            "Phase 10C connectivity ping: hosts=%s inventory=%s auth_mode=%s "
+            "(no playbook apply)",
             hosts,
             inventory_path,
+            auth_mode,
         )
         runner = ansible_runner.run(**run_kwargs)
         status = str(getattr(runner, "status", "unknown") or "unknown")
@@ -923,13 +1001,16 @@ class RealAnsiblePilotService:
 
         import ansible_runner  # noqa: PLC0415
 
+        auth_mode = resolve_auth_mode(self.settings)
         cmdline_parts = ["--check"]
-        remote_user = (self.settings.real_ansible_remote_user or "").strip()
-        if remote_user:
-            cmdline_parts.extend(["--user", remote_user])
-        private_key = (self.settings.real_ansible_private_key_path or "").strip()
-        if private_key:
-            cmdline_parts.extend(["--private-key", private_key])
+        # ssh_config: do not inject user/key — inventory/SSH config/agent only.
+        if auth_mode == "explicit":
+            remote_user = (self.settings.real_ansible_remote_user or "").strip()
+            if remote_user:
+                cmdline_parts.extend(["--user", remote_user])
+            private_key = (self.settings.real_ansible_private_key_path or "").strip()
+            if private_key:
+                cmdline_parts.extend(["--private-key", private_key])
         cmdline = " ".join(cmdline_parts)
 
         run_kwargs: dict[str, Any] = {
@@ -948,12 +1029,13 @@ class RealAnsiblePilotService:
         }
 
         logger.info(
-            "Phase 10A real dry-run: job_id=%s playbook=%s limit=%s cmdline=%s "
-            "(check mode; catalog only; no Excel/AI)",
+            "Phase 10C real dry-run: job_id=%s playbook=%s limit=%s cmdline=%s "
+            "auth_mode=%s (check mode; catalog only; no Excel/AI)",
             job.id,
             playbook_path,
             limit_hosts,
             cmdline,
+            auth_mode,
         )
         if "--check" not in cmdline:
             raise RealAnsiblePilotError(
