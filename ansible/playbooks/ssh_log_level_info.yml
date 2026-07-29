@@ -1,14 +1,67 @@
 ---
-# Phase 9A catalog playbook stub — implement safely in a later phase.
-# Must never be generated from Excel Remediation text or AI drafts.
-# Expected: LogLevel INFO
+# Phase 11A — real safe remediation playbook (catalog only).
+# task_code: SSH_LOG_LEVEL_INFO
+# Never generated from Excel Remediation text or AI drafts.
+#
+# What changes:
+#   - Sets LogLevel INFO in /etc/ssh/sshd_config only
+# Safety:
+#   - Backup sshd_config before change
+#   - Validate with sshd -t -f %s (lineinfile) and sshd -t
+#   - Reload sshd only when the file changed and validation passes
+#   - Supports ansible check mode; idempotent lineinfile
+# Rollback: manual — see docs/remediation-rollback.md
 
 - name: Set SSH LogLevel INFO
   hosts: all
   become: true
-  serial: 20
-  gather_facts: false
+  serial: 1
+  gather_facts: true
+
+  vars:
+    sshd_config_path: /etc/ssh/sshd_config
+    # Expected hardened value for SSH_LOG_LEVEL_INFO
+    ssh_log_level: INFO
+
   tasks:
-    - name: Placeholder — not implemented
-      ansible.builtin.debug:
-        msg: "Playbook stub for SSH_LOG_LEVEL_INFO"
+    - name: Ensure sshd_config exists
+      ansible.builtin.stat:
+        path: "{{ sshd_config_path }}"
+      register: sshd_config_stat
+
+    - name: Fail if sshd_config is missing
+      ansible.builtin.fail:
+        msg: "sshd_config not found at {{ sshd_config_path }}"
+      when: not sshd_config_stat.stat.exists
+
+    - name: Backup sshd_config before change
+      ansible.builtin.copy:
+        src: "{{ sshd_config_path }}"
+        dest: "{{ sshd_config_path }}.bak-{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        mode: "0600"
+      when: not ansible_check_mode
+
+    - name: Set LogLevel {{ ssh_log_level }}
+      ansible.builtin.lineinfile:
+        path: "{{ sshd_config_path }}"
+        regexp: '^#?\s*LogLevel\b'
+        line: "LogLevel {{ ssh_log_level }}"
+        backup: true
+        validate: "/usr/sbin/sshd -t -f %s"
+      register: sshd_lineinfile
+
+    - name: Validate sshd configuration
+      ansible.builtin.command:
+        cmd: /usr/sbin/sshd -t
+      register: sshd_test
+      changed_when: false
+
+    - name: Reload sshd after successful validation
+      ansible.builtin.service:
+        name: sshd
+        state: reloaded
+      when:
+        - not ansible_check_mode
+        - sshd_lineinfile is changed
+        - sshd_test.rc == 0

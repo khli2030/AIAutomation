@@ -204,7 +204,15 @@ def can_execute_real_ansible(
                 code = code or "empty_playbook_path"
             else:
                 try:
-                    resolve_playbook_path(settings, playbook)
+                    from app.services.playbook_quality import (  # noqa: PLC0415
+                        assert_playbook_allowed_for_real_execution,
+                    )
+
+                    assert_playbook_allowed_for_real_execution(
+                        settings,
+                        catalog_relative_path=playbook,
+                        task_code=getattr(catalog, "task_code", task_code),
+                    )
                 except RealAnsibleBlockedError as exc:
                     reasons.append(exc.reason)
                     code = code or getattr(exc, "code", "playbook_missing")
@@ -637,6 +645,28 @@ class RealAnsiblePilotService:
 
         assert catalog is not None  # gated above
         playbook_rel = (catalog.ansible_playbook_path or "").strip()
+
+        from app.services.playbook_quality import (  # noqa: PLC0415
+            assert_playbook_allowed_for_real_execution,
+        )
+
+        try:
+            assert_playbook_allowed_for_real_execution(
+                self.settings,
+                catalog_relative_path=playbook_rel,
+                task_code=job.task_code,
+            )
+        except RealAnsibleBlockedError as exc:
+            self._audit_job_blocked(
+                job=job,
+                actor=actor,
+                role=role,
+                reason=exc.reason,
+                code=getattr(exc, "code", "stub_playbook"),
+            )
+            raise RealAnsiblePilotError(
+                exc.reason, code=getattr(exc, "code", "stub_playbook")
+            ) from exc
 
         old_status = job.status
         now = datetime.now(UTC)

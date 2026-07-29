@@ -244,7 +244,15 @@ def run_with_ansible_runner(
             code="catalog_disabled",
         )
     relative_playbook = (catalog.ansible_playbook_path or "").strip()
-    playbook_path = resolve_playbook_path(cfg, relative_playbook)
+    from app.services.playbook_quality import (  # noqa: PLC0415
+        assert_playbook_allowed_for_real_execution,
+    )
+
+    playbook_path = assert_playbook_allowed_for_real_execution(
+        cfg,
+        catalog_relative_path=relative_playbook,
+        task_code=getattr(catalog, "task_code", None),
+    )
 
     # 4) Inventory under ansible/inventories for lab/test only.
     inventory_path = resolve_inventory_path(cfg, getattr(job, "environment", None) or "")

@@ -1,4 +1,4 @@
-"""Seed approved remediation_catalog entries for MVP + Phase 9A task codes.
+"""Seed approved remediation_catalog entries for MVP + Phase 9A/11A task codes.
 
 Security:
 - Playbook paths come only from this catalog (never Excel Remediation text,
@@ -6,6 +6,9 @@ Security:
 - Phase 9A entries are enabled for local MVP/mock generate-plan coverage.
   Real Ansible still requires MOCK_MODE=false, REAL_ANSIBLE_ENABLED=true,
   APP_ENV=lab|test, and target environment gates (unchanged defaults).
+- Phase 11A implements four safe SSH playbooks with backup/validate;
+  supports_rollback remains manual. Stub playbooks are blocked from real
+  execution even when enabled for mock planning.
 - Older Phase 1 stub playbooks (except SSH_DISABLE_ROOT_LOGIN) remain disabled
   until individually reviewed.
 """
@@ -464,6 +467,31 @@ PHASE9A_TASK_CODES: frozenset[str] = frozenset(
     }
 )
 
+# Phase 11A — real safe SSH remediations (manual rollback only).
+PHASE11A_IMPLEMENTED_TASK_CODES: frozenset[str] = frozenset(
+    {
+        "SSH_MAX_AUTH_TRIES",
+        "SSH_LOG_LEVEL_INFO",
+        "SSH_CLIENT_ALIVE_INTERVAL",
+        "SSH_IGNORE_RHOSTS_ENABLE",
+    }
+)
+
+
+def _with_capability_defaults(item: dict[str, object]) -> dict[str, object]:
+    """Attach Phase 11A supports_* flags without claiming automated rollback."""
+    out = dict(item)
+    code = str(out["task_code"])
+    if code in PHASE11A_IMPLEMENTED_TASK_CODES or code == "SSH_DISABLE_ROOT_LOGIN":
+        out["supports_backup"] = True
+        out["supports_validation"] = True
+        out["supports_rollback"] = "manual"
+    else:
+        out.setdefault("supports_backup", False)
+        out.setdefault("supports_validation", False)
+        out.setdefault("supports_rollback", "none")
+    return out
+
 
 def seed_remediation_catalog(db: Session) -> int:
     """Insert missing catalog rows and enforce enabled flags from seed.
@@ -471,7 +499,8 @@ def seed_remediation_catalog(db: Session) -> int:
     Returns number of inserted or updated rows.
     """
     changed = 0
-    for item in MVP_CATALOG:
+    for raw in MVP_CATALOG:
+        item = _with_capability_defaults(raw)
         existing = (
             db.query(RemediationCatalog)
             .filter(RemediationCatalog.task_code == item["task_code"])
@@ -482,7 +511,7 @@ def seed_remediation_catalog(db: Session) -> int:
             changed += 1
             continue
 
-        # Keep seed authoritative for is_enabled and playbook path.
+        # Keep seed authoritative for is_enabled, playbook path, and capabilities.
         desired_enabled = bool(item["is_enabled"])
         if existing.is_enabled != desired_enabled:
             existing.is_enabled = desired_enabled
@@ -490,6 +519,19 @@ def seed_remediation_catalog(db: Session) -> int:
         if existing.ansible_playbook_path != item["ansible_playbook_path"]:
             existing.ansible_playbook_path = str(item["ansible_playbook_path"])
             changed += 1
+        for field in (
+            "supports_backup",
+            "supports_validation",
+            "supports_rollback",
+            "requires_backup",
+            "requires_validation",
+            "validation_command",
+            "service_reload",
+        ):
+            desired = item.get(field)
+            if getattr(existing, field, None) != desired:
+                setattr(existing, field, desired)
+                changed += 1
 
     db.commit()
     return changed
