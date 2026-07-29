@@ -83,6 +83,10 @@ class AnsibleSafetyStatus:
     single_host_pilot_qualified: bool = False
     auth_mode: str = "explicit"
     auth_source: str = "explicit"
+    execution_mode: str = "local"
+    control_node_configured: bool = False
+    control_node_workdir: str | None = None
+    delegate_available: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -104,6 +108,10 @@ class AnsibleSafetyStatus:
             "single_host_pilot_qualified": self.single_host_pilot_qualified,
             "auth_mode": self.auth_mode,
             "auth_source": self.auth_source,
+            "execution_mode": self.execution_mode,
+            "control_node_configured": self.control_node_configured,
+            "control_node_workdir": self.control_node_workdir,
+            "delegate_available": self.delegate_available,
         }
 
 
@@ -241,11 +249,28 @@ def build_safety_status(
     *,
     known_task_codes: list[str] | None = None,
 ) -> AnsibleSafetyStatus:
-    """Read-only Phase 10A/10B/10C safety status for operators."""
+    """Read-only Phase 10A/10B/10C/11B safety status for operators."""
     preview = build_lab_config_preview(
         settings, known_task_codes=known_task_codes
     )
-    runner_ok, runner_detail = ansible_runner_available()
+    from app.services.ssh_delegate_ansible import (  # noqa: PLC0415
+        resolve_execution_mode,
+        ssh_client_available,
+    )
+
+    execution_mode = resolve_execution_mode(settings)
+    if execution_mode == "ssh_delegate":
+        backend_ok, backend_detail = ssh_client_available()
+        if preview.delegate_available:
+            backend_ok = True
+        elif not preview.control_node_configured:
+            backend_ok = False
+            backend_detail = (
+                "ssh_delegate control node host/workdir not configured"
+            )
+    else:
+        backend_ok, backend_detail = ansible_runner_available()
+
     reasons = list(preview.validation_errors)
     for err in preview.pilot_readiness_errors:
         if err not in reasons:
@@ -254,17 +279,20 @@ def build_safety_status(
         note = "REAL_ANSIBLE_CHECK_MODE_ONLY=true — apply/run remains blocked"
         if note not in reasons:
             reasons.append(note)
-    if not runner_ok:
-        reasons.append(runner_detail)
+    if not backend_ok:
+        reasons.append(backend_detail)
 
-    single_host_qualified = bool(preview.pilot_ready) and runner_ok
+    single_host_qualified = bool(preview.pilot_ready) and backend_ok
     real_execution_available = (
-        bool(preview.connectivity_allowed) and runner_ok and bool(preview.pilot_mode)
+        bool(preview.connectivity_allowed)
+        and backend_ok
+        and bool(preview.pilot_mode)
     )
     if single_host_qualified:
         reasons = [
             "Single-host lab pilot qualifies "
             f"(max_hosts_per_run={preview.max_hosts_per_run}; "
+            f"execution_mode={execution_mode}; "
             "check-mode only; apply remains blocked)"
         ]
     elif not preview.pilot_mode:
@@ -290,14 +318,26 @@ def build_safety_status(
         single_host_pilot_qualified=single_host_qualified,
         auth_mode=preview.auth_mode,
         auth_source=preview.auth_source,
+        execution_mode=execution_mode,
+        control_node_configured=bool(preview.control_node_configured),
+        control_node_workdir=preview.control_node_workdir,
+        delegate_available=bool(preview.delegate_available),
     )
 
 
 def resolve_pilot_inventory_path(settings: Settings, environment: str | None) -> Path:
-    """Prefer REAL_ANSIBLE_INVENTORY_PATH when set; else lab/test inventory mapping."""
+    """Prefer REAL_ANSIBLE_INVENTORY_PATH when set; else lab/test inventory mapping.
+
+    In ssh_delegate mode the path is treated as a remote path string (may not
+    exist locally); callers must use str(path) when building remote commands.
+    """
+    from app.services.ssh_delegate_ansible import resolve_execution_mode  # noqa: PLC0415
+
     override = (settings.real_ansible_inventory_path or "").strip()
     if override:
         path = Path(override)
+        if resolve_execution_mode(settings) == "ssh_delegate":
+            return path
         if not path.is_file():
             raise RealAnsibleBlockedError(
                 f"REAL_ANSIBLE_INVENTORY_PATH not found: {override!r}",
@@ -918,10 +958,22 @@ class RealAnsiblePilotService:
         self.db.commit()
 
     def _run_ping(self, hosts: list[str]) -> dict[str, Any]:
-        """Safe connectivity check via ansible-runner module=ping (lazy import)."""
+        """Safe connectivity check — local ansible-runner or ssh_delegate."""
+        from app.services.ssh_delegate_ansible import (  # noqa: PLC0415
+            resolve_execution_mode,
+            run_delegated_ping,
+        )
+
         inventory_path = resolve_pilot_inventory_path(
             self.settings, environment="test"
         )
+        if resolve_execution_mode(self.settings) == "ssh_delegate":
+            return run_delegated_ping(
+                self.settings,
+                hosts=hosts,
+                inventory_path=str(inventory_path),
+            )
+
         private_data_dir = (
             Path(self.settings.runner_private_data_dir) / "connectivity-ping"
         )
@@ -995,6 +1047,7 @@ class RealAnsiblePilotService:
             "stdout": stdout[:8000],
             "stderr": stderr[:8000],
             "reasons": [] if ok else [f"ansible-runner status={status}"],
+            "execution_backend": "local",
         }
 
     def _run_check_mode_playbook(
@@ -1004,7 +1057,13 @@ class RealAnsiblePilotService:
         catalog: RemediationCatalog,
         playbook_rel: str,
     ) -> dict[str, Any]:
-        """Run catalog playbook with --check only (lazy ansible-runner import)."""
+        """Run catalog playbook with --check only (local or ssh_delegate)."""
+        from app.services.ssh_delegate_ansible import (  # noqa: PLC0415
+            resolve_execution_mode,
+            run_delegated_playbook_check,
+        )
+
+        # Always resolve/validate local catalog playbook for stub gates.
         playbook_path = resolve_playbook_path(self.settings, playbook_rel)
         inventory_path = resolve_pilot_inventory_path(
             self.settings, getattr(job, "environment", None)
@@ -1021,6 +1080,14 @@ class RealAnsiblePilotService:
             raise RealAnsiblePilotError(
                 "No allowlisted hosts remain for --limit",
                 code="host_not_allowlisted",
+            )
+
+        if resolve_execution_mode(self.settings) == "ssh_delegate":
+            return run_delegated_playbook_check(
+                self.settings,
+                playbook_rel=playbook_rel,
+                inventory_path=str(inventory_path),
+                limit_hosts=limit_hosts,
             )
 
         private_data_dir = (
@@ -1098,6 +1165,7 @@ class RealAnsiblePilotService:
             "check_mode": True,
             "playbook": str(playbook_path),
             "inventory": str(inventory_path),
+            "execution_backend": "local",
             "hosts": [
                 {
                     "device_name": h.device_name,

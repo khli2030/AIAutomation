@@ -23,10 +23,18 @@ from app.services.ansible_env_parse import (
 
 
 def inventory_is_configured(settings: Settings) -> bool:
-    """True when an explicit inventory path is set and exists as a file."""
+    """True when inventory path is set.
+
+    local mode: path must exist as a local file.
+    ssh_delegate: path is interpreted on the control node (existence not checked locally).
+    """
     override = (settings.real_ansible_inventory_path or "").strip()
     if not override:
         return False
+    from app.services.ssh_delegate_ansible import resolve_execution_mode  # noqa: PLC0415
+
+    if resolve_execution_mode(settings) == "ssh_delegate":
+        return True
     return Path(override).is_file()
 
 
@@ -34,6 +42,11 @@ def private_key_is_configured(settings: Settings) -> bool:
     path = (settings.real_ansible_private_key_path or "").strip()
     if not path:
         return False
+    from app.services.ssh_delegate_ansible import resolve_execution_mode  # noqa: PLC0415
+
+    if resolve_execution_mode(settings) == "ssh_delegate":
+        # Path refers to the control node filesystem.
+        return True
     return Path(path).is_file()
 
 
@@ -85,6 +98,10 @@ class LabConfigPreview:
     pilot_readiness_errors: list[str] = field(default_factory=list)
     auth_mode: str = "explicit"
     auth_source: str = "explicit"
+    execution_mode: str = "local"
+    control_node_configured: bool = False
+    control_node_workdir: str | None = None
+    delegate_available: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -106,6 +123,10 @@ class LabConfigPreview:
             "pilot_readiness_errors": list(self.pilot_readiness_errors),
             "auth_mode": self.auth_mode,
             "auth_source": self.auth_source,
+            "execution_mode": self.execution_mode,
+            "control_node_configured": self.control_node_configured,
+            "control_node_workdir": self.control_node_workdir,
+            "delegate_available": self.delegate_available,
         }
 
 
@@ -124,6 +145,10 @@ class PilotReadiness:
     private_key_configured: bool = False
     auth_mode: str = "explicit"
     auth_source: str = "explicit"
+    execution_mode: str = "local"
+    control_node_configured: bool = False
+    control_node_workdir: str | None = None
+    delegate_available: bool = False
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -142,6 +167,10 @@ class PilotReadiness:
             "private_key_configured": self.private_key_configured,
             "auth_mode": self.auth_mode,
             "auth_source": self.auth_source,
+            "execution_mode": self.execution_mode,
+            "control_node_configured": self.control_node_configured,
+            "control_node_workdir": self.control_node_workdir,
+            "delegate_available": self.delegate_available,
             "errors": list(self.errors),
             "warnings": list(self.warnings),
         }
@@ -171,6 +200,20 @@ def build_lab_config_preview(
     pilot_mode = bool(getattr(settings, "real_ansible_pilot_mode", False))
     auth_mode = resolve_auth_mode(settings)
     explicit_auth = auth_mode == "explicit"
+
+    from app.services.ssh_delegate_ansible import (  # noqa: PLC0415
+        control_node_configured as cn_configured,
+        control_node_workdir as cn_workdir,
+        delegate_available as cn_delegate_available,
+        delegate_blocking_reasons,
+        resolve_execution_mode,
+    )
+
+    execution_mode = resolve_execution_mode(settings)
+    control_configured = cn_configured(settings)
+    workdir_value = cn_workdir(settings) or None
+    # Never expose secrets; workdir is a non-secret path on the control node.
+    delegate_ok = cn_delegate_available(settings)
 
     inv_configured = inventory_is_configured(settings)
     key_configured = private_key_is_configured(settings)
@@ -215,6 +258,10 @@ def build_lab_config_preview(
                     "REAL_ANSIBLE_PRIVATE_KEY_PATH missing or file not found "
                     "(required when REAL_ANSIBLE_AUTH_MODE=explicit)"
                 )
+        if execution_mode == "ssh_delegate":
+            for reason in delegate_blocking_reasons(settings):
+                if reason not in errors:
+                    errors.append(reason)
         if settings.mock_mode:
             errors.append(
                 "MOCK_MODE=true — real connectivity remains blocked "
@@ -234,11 +281,14 @@ def build_lab_config_preview(
         or "INVENTORY_PATH missing" in e
         or (explicit_auth and "REMOTE_USER missing" in e)
         or (explicit_auth and "PRIVATE_KEY_PATH missing" in e)
+        or "CONTROL_NODE_HOST missing" in e
+        or "CONTROL_NODE_WORKDIR missing" in e
         or "is empty" in e
         or ("MOCK_MODE=true" in e and settings.real_ansible_enabled)
     ]
 
     auth_ok = (not explicit_auth) or (user_configured and key_configured)
+    delegate_ok_for_run = execution_mode != "ssh_delegate" or delegate_ok
     base_connectivity_ok = (
         (not settings.mock_mode)
         and bool(settings.real_ansible_enabled)
@@ -246,6 +296,7 @@ def build_lab_config_preview(
         and bool(codes)
         and inv_configured
         and auth_ok
+        and delegate_ok_for_run
         and not hard_failures
     )
 
@@ -304,6 +355,10 @@ def build_lab_config_preview(
             msg = "Private key not configured — pilot not ready"
             if msg not in pilot_errors:
                 pilot_errors.append(msg)
+        if execution_mode == "ssh_delegate" and not delegate_ok:
+            for reason in delegate_blocking_reasons(settings):
+                if reason not in pilot_errors:
+                    pilot_errors.append(reason)
 
     pilot_ready = (
         base_connectivity_ok
@@ -346,6 +401,10 @@ def build_lab_config_preview(
         pilot_readiness_errors=pilot_errors,
         auth_mode=auth_mode,
         auth_source=auth_mode,
+        execution_mode=execution_mode,
+        control_node_configured=control_configured,
+        control_node_workdir=workdir_value,
+        delegate_available=delegate_ok if execution_mode == "ssh_delegate" else False,
     )
 
 
@@ -373,6 +432,15 @@ def build_pilot_readiness(
             "Auth mode ssh_config — using system SSH config / inventory / agent "
             "(user/key CLI args are not injected)"
         )
+    if preview.execution_mode == "ssh_delegate":
+        warnings.append(
+            "Execution mode ssh_delegate — Local app / Remote Ansible Control Node "
+            "(ansible runs on INFRA-OPS via SSH BatchMode)"
+        )
+        if not preview.delegate_available:
+            warnings.append(
+                "ssh_delegate is not fully configured — see control node errors"
+            )
     if len(preview.allowed_hosts) > preview.max_hosts_per_run:
         warnings.append(
             f"Allowlist has {len(preview.allowed_hosts)} hosts but each run is "
@@ -402,6 +470,10 @@ def build_pilot_readiness(
         private_key_configured=bool(preview.private_key_configured),
         auth_mode=preview.auth_mode,
         auth_source=preview.auth_source,
+        execution_mode=preview.execution_mode,
+        control_node_configured=bool(preview.control_node_configured),
+        control_node_workdir=preview.control_node_workdir,
+        delegate_available=bool(preview.delegate_available),
         errors=errors,
         warnings=warnings,
     )

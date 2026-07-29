@@ -149,6 +149,10 @@ export type AnsibleSafetyStatus = {
   single_host_pilot_qualified?: boolean;
   auth_mode?: string;
   auth_source?: string;
+  execution_mode?: string;
+  control_node_configured?: boolean;
+  control_node_workdir?: string | null;
+  delegate_available?: boolean;
 };
 
 export type LabConfigPreview = {
@@ -170,6 +174,10 @@ export type LabConfigPreview = {
   pilot_readiness_errors?: string[];
   auth_mode?: string;
   auth_source?: string;
+  execution_mode?: string;
+  control_node_configured?: boolean;
+  control_node_workdir?: string | null;
+  delegate_available?: boolean;
 };
 
 export type PilotReadiness = {
@@ -186,6 +194,10 @@ export type PilotReadiness = {
   private_key_configured: boolean;
   auth_mode?: string;
   auth_source?: string;
+  execution_mode?: string;
+  control_node_configured?: boolean;
+  control_node_workdir?: string | null;
+  delegate_available?: boolean;
   errors: string[];
   warnings: string[];
 };

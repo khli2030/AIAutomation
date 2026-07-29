@@ -552,6 +552,10 @@ export async function installMockApi(
         single_host_pilot_qualified: state.pilotReady,
         auth_mode: "explicit",
         auth_source: "explicit",
+        execution_mode: "local",
+        control_node_configured: false,
+        control_node_workdir: null,
+        delegate_available: false,
       });
     }
 
@@ -577,6 +581,10 @@ export async function installMockApi(
         pilot_readiness_errors: state.pilotReady ? [] : state.pilotErrors,
         auth_mode: "explicit",
         auth_source: "explicit",
+        execution_mode: "local",
+        control_node_configured: false,
+        control_node_workdir: null,
+        delegate_available: false,
       });
     }
 
@@ -597,6 +605,10 @@ export async function installMockApi(
         private_key_configured: state.realExecutionAvailable,
         auth_mode: "explicit",
         auth_source: "explicit",
+        execution_mode: "local",
+        control_node_configured: false,
+        control_node_workdir: null,
+        delegate_available: false,
         errors: state.pilotReady ? [] : state.pilotErrors,
         warnings: state.pilotWarnings,
       });

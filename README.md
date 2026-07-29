@@ -47,6 +47,8 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
+**Phase 11B available:** SSH-delegated Ansible execution (`REAL_ANSIBLE_EXECUTION_MODE=ssh_delegate`) so a local app can run check-mode/ping on the INFRA-OPS control node via SSH BatchMode. Defaults still local/mock/disabled. See [`docs/22-phase11b-ssh-delegate-execution.md`](docs/22-phase11b-ssh-delegate-execution.md).
+
 **Phase 11A available:** Real safe SSH remediation playbooks (`SSH_MAX_AUTH_TRIES`, `SSH_LOG_LEVEL_INFO`, `SSH_CLIENT_ALIVE_INTERVAL`, `SSH_IGNORE_RHOSTS_ENABLE`) with backup/validate and manual rollback. Stub/high-risk playbooks stay blocked from real execution. See [`docs/21-phase11a-safe-remediation-playbooks.md`](docs/21-phase11a-safe-remediation-playbooks.md).
 
 **Phase 10C available:** Single-host lab pilot (`REAL_ANSIBLE_PILOT_MODE`, max hosts per run, pilot-readiness; connectivity + check-mode real dry-run only; defaults still mock/disabled). See [`docs/real-ansible-lab-pilot.md`](docs/real-ansible-lab-pilot.md).
