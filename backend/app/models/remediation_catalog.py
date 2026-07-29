@@ -22,6 +22,11 @@ class RemediationCatalog(Base):
     requires_dry_run: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     requires_backup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     requires_validation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Phase 11A capability flags (sanitized; no secrets).
+    supports_backup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    supports_validation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # none | manual | automated — Phase 11A uses manual only.
+    supports_rollback: Mapped[str] = mapped_column(String(32), nullable=False, default="none")
     validation_command: Mapped[str | None] = mapped_column(Text, nullable=True)
     service_reload: Mapped[str | None] = mapped_column(String(128), nullable=True)
     is_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)

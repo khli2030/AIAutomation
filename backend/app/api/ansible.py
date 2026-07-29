@@ -22,17 +22,25 @@ from app.schemas.ansible import (
     LabConfigPreviewResponse,
     PilotReadinessResponse,
     PreflightCheckResponse,
+    RemediationCapabilitiesResponse,
+    RemediationCapabilityItem,
 )
 from app.services.ansible_safety import build_preflight_report
 from app.services.lab_ansible_config import (
     build_lab_config_preview,
     build_pilot_readiness,
 )
+from app.services.playbook_quality import (
+    PHASE11A_IMPLEMENTED_TASK_CODES,
+    catalog_capability_flags,
+    is_stub_playbook,
+)
 from app.services.real_ansible_pilot import (
     RealAnsiblePilotError,
     RealAnsiblePilotService,
     build_safety_status,
 )
+from pathlib import Path
 
 router = APIRouter()
 
@@ -107,6 +115,70 @@ def ansible_pilot_readiness(
         settings, known_task_codes=_known_task_codes(db)
     )
     return PilotReadinessResponse(**readiness.to_dict())
+
+
+@router.get(
+    "/remediation-capabilities",
+    response_model=RemediationCapabilitiesResponse,
+)
+def ansible_remediation_capabilities(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+    auth: AuthContext = require_roles(*READ_ROLES),
+) -> RemediationCapabilitiesResponse:
+    """Phase 11A catalog capability flags (backup / validation / rollback).
+
+    Never executes Ansible. Never returns playbook secrets or Excel/AI text.
+    """
+    _ = auth
+    rows = list(db.scalars(select(RemediationCatalog)).all())
+    playbooks_dir = Path(settings.ansible_playbooks_dir)
+    items: list[RemediationCapabilityItem] = []
+    for row in rows:
+        rel = (row.ansible_playbook_path or "").strip()
+        path = playbooks_dir / rel if rel else None
+        flags = catalog_capability_flags(
+            task_code=row.task_code,
+            playbook_path=path if path and path.is_file() else None,
+        )
+        # Prefer DB seed flags when present; fall back to playbook inspection.
+        supports_backup = bool(
+            getattr(row, "supports_backup", False) or flags["supports_backup"]
+        )
+        supports_validation = bool(
+            getattr(row, "supports_validation", False)
+            or flags["supports_validation"]
+        )
+        supports_rollback = str(
+            getattr(row, "supports_rollback", None)
+            or flags["supports_rollback"]
+            or "none"
+        )
+        stub = bool(flags["is_stub"])
+        if path is not None and path.is_file():
+            stub = is_stub_playbook(path)
+        items.append(
+            RemediationCapabilityItem(
+                task_code=row.task_code,
+                title=row.title,
+                ansible_playbook_path=rel or None,
+                is_enabled=bool(row.is_enabled),
+                is_stub=stub,
+                phase11a_implemented=bool(flags["phase11a_implemented"]),
+                supports_backup=supports_backup,
+                supports_validation=supports_validation,
+                supports_rollback=supports_rollback,
+                high_risk_blocked=bool(flags["high_risk_blocked"]),
+                requires_backup=bool(row.requires_backup),
+                requires_validation=bool(row.requires_validation),
+            )
+        )
+    return RemediationCapabilitiesResponse(
+        items=items,
+        implemented_task_codes=sorted(PHASE11A_IMPLEMENTED_TASK_CODES),
+        stub_blocked_from_real_execution=True,
+        automated_rollback_available=False,
+    )
 
 
 @router.post("/connectivity-check", response_model=ConnectivityCheckResponse)
