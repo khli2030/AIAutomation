@@ -110,15 +110,45 @@ export default function SafetyAnsiblePage() {
       <div className="page-header">
         <h1>Safety / Ansible</h1>
         <p>
-          Phase 10C single-host lab pilot. Defaults keep{" "}
-          <code>MOCK_MODE=true</code>,{" "}
-          <code>REAL_ANSIBLE_ENABLED=false</code>, and{" "}
-          <code>REAL_ANSIBLE_PILOT_MODE=false</code>. Connectivity and real
+          Phase 11B single-host lab pilot with optional SSH-delegated Ansible.
+          Defaults keep <code>MOCK_MODE=true</code>,{" "}
+          <code>REAL_ANSIBLE_ENABLED=false</code>,{" "}
+          <code>REAL_ANSIBLE_PILOT_MODE=false</code>, and{" "}
+          <code>REAL_ANSIBLE_EXECUTION_MODE=local</code>. Connectivity and real
           dry-run are check-mode / ping only — no real apply/run. Private key
           contents are never displayed. Excel Remediation and AI drafts are never
           executed.
         </p>
       </div>
+      {(status?.execution_mode ?? "local") === "ssh_delegate" ? (
+        <div
+          className="safety-note"
+          data-testid="execution-mode-badge"
+          style={{ marginBottom: "1rem" }}
+        >
+          <strong>Local app / Remote Ansible Control Node</strong>
+          {status?.control_node_workdir ? (
+            <span className="muted">
+              {" "}
+              · workdir: <code>{status.control_node_workdir}</code>
+            </span>
+          ) : null}
+          {!(status?.delegate_available ?? false) ? (
+            <p style={{ margin: "0.5rem 0 0" }} data-testid="ssh-delegate-warning">
+              ssh_delegate is not fully configured. Set control node host and
+              workdir, and ensure the local <code>ssh</code> client is available.
+            </p>
+          ) : null}
+        </div>
+      ) : (
+        <div
+          className="muted"
+          data-testid="execution-mode-badge"
+          style={{ marginBottom: "1rem" }}
+        >
+          Execution mode: <code>{status?.execution_mode ?? "local"}</code>
+        </div>
+      )}
       <ErrorBox message={error} />
       <SuccessBox message={message} />
 
@@ -227,6 +257,27 @@ export default function SafetyAnsiblePage() {
                 <div className="label">AUTH_SOURCE</div>
                 <div className="value" data-testid="safety-auth-source">
                   {status.auth_source ?? status.auth_mode ?? "explicit"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">EXECUTION_MODE</div>
+                <div className="value" data-testid="safety-execution-mode">
+                  {status.execution_mode ?? "local"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">control_node_configured</div>
+                <div
+                  className="value"
+                  data-testid="safety-control-node-configured"
+                >
+                  {String(status.control_node_configured ?? false)}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">delegate_available</div>
+                <div className="value" data-testid="safety-delegate-available">
+                  {String(status.delegate_available ?? false)}
                 </div>
               </div>
               <div className="stat">
@@ -339,6 +390,24 @@ export default function SafetyAnsiblePage() {
                 <div className="label">auth_source</div>
                 <div className="value" data-testid="lab-auth-source">
                   {lab.auth_source ?? lab.auth_mode ?? "explicit"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">execution_mode</div>
+                <div className="value" data-testid="lab-execution-mode">
+                  {lab.execution_mode ?? "local"}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">control_node_configured</div>
+                <div className="value" data-testid="lab-control-node-configured">
+                  {String(lab.control_node_configured ?? false)}
+                </div>
+              </div>
+              <div className="stat">
+                <div className="label">delegate_available</div>
+                <div className="value" data-testid="lab-delegate-available">
+                  {String(lab.delegate_available ?? false)}
                 </div>
               </div>
             </div>

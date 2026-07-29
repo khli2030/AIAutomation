@@ -94,6 +94,15 @@ class Settings(BaseSettings):
     real_ansible_pilot_mode: bool = False
     real_ansible_max_hosts_per_run: int = 1
 
+    # Phase 11B: where Ansible runs.
+    #   local        — ansible-runner on this host (default)
+    #   ssh_delegate — SSH to INFRA-OPS control node; no local ansible
+    real_ansible_execution_mode: str = "local"
+    real_ansible_control_node_host: str | None = None
+    real_ansible_control_node_user: str | None = None
+    real_ansible_control_node_workdir: str | None = None
+    real_ansible_control_node_timeout_seconds: int = 120
+
     # AI Analyzer is interface-only until explicitly configured (mock by default).
     ai_provider: str = "mock"
     ai_enabled: bool = False
@@ -133,6 +142,9 @@ class Settings(BaseSettings):
         "real_ansible_inventory_path",
         "real_ansible_private_key_path",
         "real_ansible_remote_user",
+        "real_ansible_control_node_host",
+        "real_ansible_control_node_user",
+        "real_ansible_control_node_workdir",
         mode="before",
     )
     @classmethod
@@ -150,6 +162,27 @@ class Settings(BaseSettings):
             return text
         return "explicit"
 
+    @field_validator("real_ansible_execution_mode", mode="before")
+    @classmethod
+    def _normalize_execution_mode(cls, value: object) -> str:
+        text = str(value or "local").strip().lower()
+        if text in {"local", "ssh_delegate"}:
+            return text
+        return "local"
+
+    @field_validator("real_ansible_control_node_timeout_seconds", mode="before")
+    @classmethod
+    def _validate_control_node_timeout(cls, value: object) -> int:
+        try:
+            n = int(value)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return 120
+        if n < 10:
+            return 10
+        if n > 600:
+            return 600
+        return n
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
@@ -166,6 +199,11 @@ class Settings(BaseSettings):
     def real_ansible_auth_mode_normalized(self) -> str:
         mode = (self.real_ansible_auth_mode or "explicit").strip().lower()
         return mode if mode in {"explicit", "ssh_config"} else "explicit"
+
+    @property
+    def real_ansible_execution_mode_normalized(self) -> str:
+        mode = (self.real_ansible_execution_mode or "local").strip().lower()
+        return mode if mode in {"local", "ssh_delegate"} else "local"
 
 
 @lru_cache

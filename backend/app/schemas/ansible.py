@@ -40,6 +40,10 @@ class AnsibleSafetyStatusResponse(BaseModel):
     single_host_pilot_qualified: bool = False
     auth_mode: str = "explicit"
     auth_source: str = "explicit"
+    execution_mode: str = "local"
+    control_node_configured: bool = False
+    control_node_workdir: str | None = None
+    delegate_available: bool = False
 
 
 class ConnectivityCheckRequest(BaseModel):
@@ -81,6 +85,10 @@ class LabConfigPreviewResponse(BaseModel):
     pilot_readiness_errors: list[str] = Field(default_factory=list)
     auth_mode: str = "explicit"
     auth_source: str = "explicit"
+    execution_mode: str = "local"
+    control_node_configured: bool = False
+    control_node_workdir: str | None = None
+    delegate_available: bool = False
 
 
 class PilotReadinessResponse(BaseModel):
@@ -97,6 +105,10 @@ class PilotReadinessResponse(BaseModel):
     private_key_configured: bool = False
     auth_mode: str = "explicit"
     auth_source: str = "explicit"
+    execution_mode: str = "local"
+    control_node_configured: bool = False
+    control_node_workdir: str | None = None
+    delegate_available: bool = False
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
