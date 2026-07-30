@@ -31,7 +31,7 @@ from app.services.lab_ansible_config import (
     build_pilot_readiness,
 )
 from app.services.playbook_quality import (
-    PHASE11A_IMPLEMENTED_TASK_CODES,
+    PHASE11_SAFE_IMPLEMENTED_TASK_CODES,
     catalog_capability_flags,
     is_stub_playbook,
 )
@@ -126,7 +126,7 @@ def ansible_remediation_capabilities(
     settings: Settings = Depends(get_settings),
     auth: AuthContext = require_roles(*READ_ROLES),
 ) -> RemediationCapabilitiesResponse:
-    """Phase 11A catalog capability flags (backup / validation / rollback).
+    """Phase 11A/11C catalog capability flags (backup / validation / rollback).
 
     Never executes Ansible. Never returns playbook secrets or Excel/AI text.
     """
@@ -165,6 +165,7 @@ def ansible_remediation_capabilities(
                 is_enabled=bool(row.is_enabled),
                 is_stub=stub,
                 phase11a_implemented=bool(flags["phase11a_implemented"]),
+                phase11c_implemented=bool(flags["phase11c_implemented"]),
                 supports_backup=supports_backup,
                 supports_validation=supports_validation,
                 supports_rollback=supports_rollback,
@@ -175,7 +176,7 @@ def ansible_remediation_capabilities(
         )
     return RemediationCapabilitiesResponse(
         items=items,
-        implemented_task_codes=sorted(PHASE11A_IMPLEMENTED_TASK_CODES),
+        implemented_task_codes=sorted(PHASE11_SAFE_IMPLEMENTED_TASK_CODES),
         stub_blocked_from_real_execution=True,
         automated_rollback_available=False,
     )

@@ -25,7 +25,7 @@ export function Sidebar() {
     <aside className="sidebar">
       <div className="brand">
         Compliance Remediation
-        <span>Internal operator console · Phase 11B</span>
+        <span>Internal operator console · Phase 11C</span>
       </div>
       <nav className="nav" aria-label="Primary">
         {LINKS.map((link) => {

@@ -1,14 +1,69 @@
 ---
-# Phase 9A catalog playbook stub — implement safely in a later phase.
-# Must never be generated from Excel Remediation text or AI drafts.
-# Expected: TMOUT=600
+# Phase 11C — real safe remediation playbook (catalog only).
+# task_code: SHELL_TMOUT
+# Never generated from Excel Remediation text or AI drafts.
+#
+# What changes:
+#   - Ensures TMOUT=600 via /etc/profile.d/99-aiautomation-tmout.sh
+# Safety:
+#   - Backup existing managed file if present
+#   - File owner root:root mode 0644
+#   - Validate with bash -n
+#   - Supports ansible check mode; idempotent
+# Rollback: manual — see docs/remediation-rollback.md
 
-- name: Set shell TMOUT
+- name: Set shell TMOUT=600
   hosts: all
   become: true
-  serial: 20
-  gather_facts: false
+  serial: 1
+  gather_facts: true
+
+  vars:
+    tmout_profile_path: /etc/profile.d/99-aiautomation-tmout.sh
+    shell_tmout: 600
+
   tasks:
-    - name: Placeholder — not implemented
-      ansible.builtin.debug:
-        msg: "Playbook stub for SHELL_TMOUT"
+    - name: Ensure /etc/profile.d exists
+      ansible.builtin.stat:
+        path: /etc/profile.d
+      register: profile_d_stat
+
+    - name: Fail if /etc/profile.d is missing
+      ansible.builtin.fail:
+        msg: "/etc/profile.d not found — cannot install TMOUT profile script"
+      when: not profile_d_stat.stat.exists
+
+    - name: Stat existing managed TMOUT profile script
+      ansible.builtin.stat:
+        path: "{{ tmout_profile_path }}"
+      register: tmout_stat
+
+    - name: Backup existing managed TMOUT profile if present
+      ansible.builtin.copy:
+        src: "{{ tmout_profile_path }}"
+        dest: "{{ tmout_profile_path }}.bak-{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        mode: "0644"
+      when:
+        - tmout_stat.stat.exists
+        - not ansible_check_mode
+
+    - name: Ensure TMOUT={{ shell_tmout }} profile script
+      ansible.builtin.copy:
+        dest: "{{ tmout_profile_path }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by AIAutomation catalog playbook SHELL_TMOUT
+          # See docs/remediation-rollback.md for manual rollback
+          export TMOUT={{ shell_tmout }}
+        validate: /bin/bash -n %s
+      register: tmout_copy
+
+    - name: Validate TMOUT profile with bash -n
+      ansible.builtin.command:
+        cmd: /bin/bash -n {{ tmout_profile_path }}
+      register: tmout_bash_n
+      changed_when: false
+      when: not ansible_check_mode
