@@ -1,14 +1,77 @@
 ---
-# Phase 9A catalog playbook stub — implement safely in a later phase.
-# Must never be generated from Excel Remediation text or AI drafts.
-# Expected: chmod 700 /etc/cron.daily
+# Phase 11C — real safe remediation playbook (catalog only).
+# task_code: CRON_DAILY_PERMISSIONS
+# Never generated from Excel Remediation text or AI drafts.
+#
+# What changes:
+#   - Sets /etc/cron.daily owner root:root mode 0700
+# Safety:
+#   - Does not create /etc/cron.daily if missing
+#   - Captures previous owner/group/mode for manual rollback documentation
+#   - Supports ansible check mode; idempotent
+# Rollback: manual — see docs/remediation-rollback.md
 
-- name: Set /etc/cron.daily permissions
+- name: Set /etc/cron.daily permissions to 0700
   hosts: all
   become: true
-  serial: 20
-  gather_facts: false
+  serial: 1
+  gather_facts: true
+
+  vars:
+    cron_daily_path: /etc/cron.daily
+    cron_daily_desired_mode: "0700"
+
   tasks:
-    - name: Placeholder — not implemented
+    - name: Ensure /etc/cron.daily exists before changing
+      ansible.builtin.stat:
+        path: "{{ cron_daily_path }}"
+      register: cron_daily_stat
+
+    - name: Fail if /etc/cron.daily is missing (do not create)
+      ansible.builtin.fail:
+        msg: >-
+          {{ cron_daily_path }} does not exist — refusing to create it.
+          CRON_DAILY_PERMISSIONS only adjusts permissions on an existing directory.
+      when: not cron_daily_stat.stat.exists
+
+    - name: Capture previous owner/group/mode for manual rollback documentation
+      ansible.builtin.set_fact:
+        previous_owner: "{{ cron_daily_stat.stat.pw_name | default(cron_daily_stat.stat.uid) }}"
+        previous_group: "{{ cron_daily_stat.stat.gr_name | default(cron_daily_stat.stat.gid) }}"
+        previous_mode: "{{ cron_daily_stat.stat.mode }}"
+
+    - name: Record previous cron.daily permissions for operators
       ansible.builtin.debug:
-        msg: "Playbook stub for CRON_DAILY_PERMISSIONS"
+        msg: >-
+          previous_owner={{ previous_owner }}
+          previous_group={{ previous_group }}
+          previous_mode={{ previous_mode }}
+          (manual rollback — see docs/remediation-rollback.md)
+
+    - name: Set /etc/cron.daily owner root group root mode {{ cron_daily_desired_mode }}
+      ansible.builtin.file:
+        path: "{{ cron_daily_path }}"
+        owner: root
+        group: root
+        mode: "{{ cron_daily_desired_mode }}"
+        state: directory
+      register: cron_daily_perms
+
+    - name: Verify cron.daily permissions after change
+      ansible.builtin.stat:
+        path: "{{ cron_daily_path }}"
+      register: cron_daily_after
+      when: not ansible_check_mode
+
+    - name: Assert cron.daily mode and ownership
+      ansible.builtin.assert:
+        that:
+          - cron_daily_after.stat.isdir
+          - cron_daily_after.stat.mode == cron_daily_desired_mode
+          - cron_daily_after.stat.pw_name == 'root'
+          - cron_daily_after.stat.gr_name == 'root'
+        fail_msg: >-
+          Expected {{ cron_daily_path }} directory root:root {{ cron_daily_desired_mode }},
+          got {{ cron_daily_after.stat.pw_name }}:{{ cron_daily_after.stat.gr_name }}
+          mode={{ cron_daily_after.stat.mode }}
+      when: not ansible_check_mode

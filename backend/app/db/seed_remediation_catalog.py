@@ -1,4 +1,4 @@
-"""Seed approved remediation_catalog entries for MVP + Phase 9A/11A task codes.
+"""Seed approved remediation_catalog entries for MVP + Phase 9A/11A/11C task codes.
 
 Security:
 - Playbook paths come only from this catalog (never Excel Remediation text,
@@ -7,8 +7,10 @@ Security:
   Real Ansible still requires MOCK_MODE=false, REAL_ANSIBLE_ENABLED=true,
   APP_ENV=lab|test, and target environment gates (unchanged defaults).
 - Phase 11A implements four safe SSH playbooks with backup/validate;
-  supports_rollback remains manual. Stub playbooks are blocked from real
-  execution even when enabled for mock planning.
+  Phase 11C adds four lower-risk Linux playbooks (journald Compress,
+  shell TMOUT, crontab / cron.daily permissions). supports_rollback remains
+  manual. Stub playbooks are blocked from real execution even when enabled
+  for mock planning.
 - Older Phase 1 stub playbooks (except SSH_DISABLE_ROOT_LOGIN) remain disabled
   until individually reviewed.
 """
@@ -241,8 +243,8 @@ MVP_CATALOG: list[dict[str, object]] = [
         "requires_dry_run": True,
         "requires_backup": True,
         "requires_validation": True,
-        "validation_command": None,
-        "service_reload": None,
+        "validation_command": "grep -E '^Compress=yes'",
+        "service_reload": "systemd-journald",
         "is_enabled": True,
     },
     {
@@ -311,7 +313,7 @@ MVP_CATALOG: list[dict[str, object]] = [
         "requires_dry_run": True,
         "requires_backup": True,
         "requires_validation": True,
-        "validation_command": None,
+        "validation_command": "bash -n /etc/profile.d/99-aiautomation-tmout.sh",
         "service_reload": None,
         "is_enabled": True,
     },
@@ -325,7 +327,7 @@ MVP_CATALOG: list[dict[str, object]] = [
         "requires_dry_run": True,
         "requires_backup": True,
         "requires_validation": True,
-        "validation_command": None,
+        "validation_command": "stat -c '%a %U %G' /etc/crontab",
         "service_reload": None,
         "is_enabled": True,
     },
@@ -339,7 +341,7 @@ MVP_CATALOG: list[dict[str, object]] = [
         "requires_dry_run": True,
         "requires_backup": True,
         "requires_validation": True,
-        "validation_command": None,
+        "validation_command": "stat -c '%a %U %G' /etc/cron.daily",
         "service_reload": None,
         "is_enabled": True,
     },
@@ -477,12 +479,29 @@ PHASE11A_IMPLEMENTED_TASK_CODES: frozenset[str] = frozenset(
     }
 )
 
+# Phase 11C — next lower-risk Linux remediations (manual rollback only).
+PHASE11C_IMPLEMENTED_TASK_CODES: frozenset[str] = frozenset(
+    {
+        "JOURNALD_COMPRESS_ENABLE",
+        "SHELL_TMOUT",
+        "CRONTAB_PERMISSIONS",
+        "CRON_DAILY_PERMISSIONS",
+    }
+)
+
+PHASE11_SAFE_IMPLEMENTED_TASK_CODES: frozenset[str] = (
+    PHASE11A_IMPLEMENTED_TASK_CODES | PHASE11C_IMPLEMENTED_TASK_CODES
+)
+
 
 def _with_capability_defaults(item: dict[str, object]) -> dict[str, object]:
-    """Attach Phase 11A supports_* flags without claiming automated rollback."""
+    """Attach Phase 11A/11C supports_* flags without claiming automated rollback."""
     out = dict(item)
     code = str(out["task_code"])
-    if code in PHASE11A_IMPLEMENTED_TASK_CODES or code == "SSH_DISABLE_ROOT_LOGIN":
+    if (
+        code in PHASE11_SAFE_IMPLEMENTED_TASK_CODES
+        or code == "SSH_DISABLE_ROOT_LOGIN"
+    ):
         out["supports_backup"] = True
         out["supports_validation"] = True
         out["supports_rollback"] = "manual"

@@ -1,14 +1,75 @@
 ---
-# Phase 9A catalog playbook stub — implement safely in a later phase.
-# Must never be generated from Excel Remediation text or AI drafts.
-# Expected: chmod 600 /etc/crontab
+# Phase 11C — real safe remediation playbook (catalog only).
+# task_code: CRONTAB_PERMISSIONS
+# Never generated from Excel Remediation text or AI drafts.
+#
+# What changes:
+#   - Sets /etc/crontab owner root:root mode 0600
+# Safety:
+#   - Does not create /etc/crontab if missing
+#   - Captures previous owner/group/mode for manual rollback documentation
+#   - Supports ansible check mode; idempotent
+# Rollback: manual — see docs/remediation-rollback.md
 
-- name: Set /etc/crontab permissions
+- name: Set /etc/crontab permissions to 0600
   hosts: all
   become: true
-  serial: 20
-  gather_facts: false
+  serial: 1
+  gather_facts: true
+
+  vars:
+    crontab_path: /etc/crontab
+    crontab_desired_mode: "0600"
+
   tasks:
-    - name: Placeholder — not implemented
+    - name: Ensure /etc/crontab exists before changing
+      ansible.builtin.stat:
+        path: "{{ crontab_path }}"
+      register: crontab_stat
+
+    - name: Fail if /etc/crontab is missing (do not create)
+      ansible.builtin.fail:
+        msg: >-
+          {{ crontab_path }} does not exist — refusing to create it.
+          CRONTAB_PERMISSIONS only adjusts permissions on an existing file.
+      when: not crontab_stat.stat.exists
+
+    - name: Capture previous owner/group/mode for manual rollback documentation
+      ansible.builtin.set_fact:
+        previous_owner: "{{ crontab_stat.stat.pw_name | default(crontab_stat.stat.uid) }}"
+        previous_group: "{{ crontab_stat.stat.gr_name | default(crontab_stat.stat.gid) }}"
+        previous_mode: "{{ crontab_stat.stat.mode }}"
+
+    - name: Record previous crontab permissions for operators
       ansible.builtin.debug:
-        msg: "Playbook stub for CRONTAB_PERMISSIONS"
+        msg: >-
+          previous_owner={{ previous_owner }}
+          previous_group={{ previous_group }}
+          previous_mode={{ previous_mode }}
+          (manual rollback — see docs/remediation-rollback.md)
+
+    - name: Set /etc/crontab owner root group root mode {{ crontab_desired_mode }}
+      ansible.builtin.file:
+        path: "{{ crontab_path }}"
+        owner: root
+        group: root
+        mode: "{{ crontab_desired_mode }}"
+      register: crontab_perms
+
+    - name: Verify crontab permissions after change
+      ansible.builtin.stat:
+        path: "{{ crontab_path }}"
+      register: crontab_after
+      when: not ansible_check_mode
+
+    - name: Assert crontab mode and ownership
+      ansible.builtin.assert:
+        that:
+          - crontab_after.stat.mode == crontab_desired_mode
+          - crontab_after.stat.pw_name == 'root'
+          - crontab_after.stat.gr_name == 'root'
+        fail_msg: >-
+          Expected {{ crontab_path }} root:root {{ crontab_desired_mode }},
+          got {{ crontab_after.stat.pw_name }}:{{ crontab_after.stat.gr_name }}
+          mode={{ crontab_after.stat.mode }}
+      when: not ansible_check_mode

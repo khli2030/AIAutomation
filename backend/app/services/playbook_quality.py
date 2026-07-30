@@ -1,4 +1,4 @@
-"""Phase 11A playbook quality gates — block stubs and high-risk remediations.
+"""Phase 11A/11C playbook quality gates — block stubs and high-risk remediations.
 
 Never executes Excel Remediation text or AI suggestions.
 """
@@ -16,7 +16,7 @@ STUB_MARKERS: tuple[str, ...] = (
     "Placeholder — not implemented",
 )
 
-# Phase 11A: only these four SSH remediations are implemented as real playbooks.
+# Phase 11A: four safe SSH remediations implemented as real playbooks.
 PHASE11A_IMPLEMENTED_TASK_CODES: frozenset[str] = frozenset(
     {
         "SSH_MAX_AUTH_TRIES",
@@ -26,7 +26,21 @@ PHASE11A_IMPLEMENTED_TASK_CODES: frozenset[str] = frozenset(
     }
 )
 
-# High-risk remediations deferred in Phase 11A — blocked from real execution
+# Phase 11C: next four lower-risk Linux remediations.
+PHASE11C_IMPLEMENTED_TASK_CODES: frozenset[str] = frozenset(
+    {
+        "JOURNALD_COMPRESS_ENABLE",
+        "SHELL_TMOUT",
+        "CRONTAB_PERMISSIONS",
+        "CRON_DAILY_PERMISSIONS",
+    }
+)
+
+PHASE11_SAFE_IMPLEMENTED_TASK_CODES: frozenset[str] = (
+    PHASE11A_IMPLEMENTED_TASK_CODES | PHASE11C_IMPLEMENTED_TASK_CODES
+)
+
+# High-risk remediations deferred — blocked from real execution
 # even if a stub is accidentally replaced without review.
 PHASE11A_HIGH_RISK_BLOCKED_TASK_CODES: frozenset[str] = frozenset(
     {
@@ -63,11 +77,24 @@ def playbook_has_backup(text: str) -> bool:
         "backup sshd_config" in lowered
         or "backup:" in lowered
         or ".bak-" in lowered
+        or "backup existing" in lowered
+        or "backup before change" in lowered
+        or "previous_owner" in lowered
+        or "previous_mode" in lowered
+        or "capture previous" in lowered
     )
 
 
 def playbook_has_validate(text: str) -> bool:
-    return "sshd -t" in text or "validate:" in text.lower()
+    lowered = text.lower()
+    return (
+        "sshd -t" in text
+        or "bash -n" in lowered
+        or "validate:" in lowered
+        or "assert" in lowered
+        or "grep -e '^compress=yes'" in lowered
+        or "compress=yes" in lowered and "validate" in lowered
+    )
 
 
 def assert_playbook_allowed_for_real_execution(
@@ -76,7 +103,7 @@ def assert_playbook_allowed_for_real_execution(
     catalog_relative_path: str,
     task_code: str | None = None,
 ) -> Path:
-    """Resolve playbook and refuse stubs / Phase 11A high-risk codes.
+    """Resolve playbook and refuse stubs / high-risk codes.
 
     Returns the resolved path when allowed.
     """
@@ -84,7 +111,7 @@ def assert_playbook_allowed_for_real_execution(
     if code and code in PHASE11A_HIGH_RISK_BLOCKED_TASK_CODES:
         raise RealAnsibleBlockedError(
             f"task_code {code!r} is high-risk and blocked from real execution "
-            "in Phase 11A",
+            "in Phase 11A/11C",
             code="high_risk_blocked",
         )
 
@@ -114,15 +141,18 @@ def catalog_capability_flags(
             text = ""
     text = text or ""
     stub = playbook_text_is_stub(text)
-    implemented = task_code in PHASE11A_IMPLEMENTED_TASK_CODES and not stub
+    phase11a = task_code in PHASE11A_IMPLEMENTED_TASK_CODES and not stub
+    phase11c = task_code in PHASE11C_IMPLEMENTED_TASK_CODES and not stub
+    implemented = phase11a or phase11c
     supports_backup = implemented and playbook_has_backup(text)
     supports_validation = implemented and playbook_has_validate(text)
-    # Automated rollback is not implemented in Phase 11A.
+    # Automated rollback is not implemented in Phase 11A/11C.
     supports_rollback = "manual" if implemented else "none"
     return {
         "task_code": task_code,
         "is_stub": stub,
-        "phase11a_implemented": implemented,
+        "phase11a_implemented": phase11a,
+        "phase11c_implemented": phase11c,
         "supports_backup": supports_backup,
         "supports_validation": supports_validation,
         "supports_rollback": supports_rollback,
@@ -133,6 +163,8 @@ def catalog_capability_flags(
 __all__ = [
     "PHASE11A_HIGH_RISK_BLOCKED_TASK_CODES",
     "PHASE11A_IMPLEMENTED_TASK_CODES",
+    "PHASE11C_IMPLEMENTED_TASK_CODES",
+    "PHASE11_SAFE_IMPLEMENTED_TASK_CODES",
     "STUB_MARKERS",
     "assert_playbook_allowed_for_real_execution",
     "catalog_capability_flags",

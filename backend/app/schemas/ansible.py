@@ -120,6 +120,7 @@ class RemediationCapabilityItem(BaseModel):
     is_enabled: bool = False
     is_stub: bool = True
     phase11a_implemented: bool = False
+    phase11c_implemented: bool = False
     supports_backup: bool = False
     supports_validation: bool = False
     supports_rollback: str = "none"
@@ -134,7 +135,8 @@ class RemediationCapabilitiesResponse(BaseModel):
     stub_blocked_from_real_execution: bool = True
     automated_rollback_available: bool = False
     note: str = (
-        "Phase 11A implements four safe SSH remediations only. "
-        "Stub playbooks and high-risk remediations are blocked from real execution. "
-        "Rollback is manual — see docs/remediation-rollback.md."
+        "Phase 11A/11C implement safe catalog remediations only "
+        "(SSH hardening, journald Compress, shell TMOUT, crontab/cron.daily "
+        "permissions). Stub playbooks and high-risk remediations are blocked "
+        "from real execution. Rollback is manual — see docs/remediation-rollback.md."
     )

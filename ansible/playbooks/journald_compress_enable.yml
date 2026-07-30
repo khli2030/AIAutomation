@@ -1,14 +1,139 @@
 ---
-# Phase 9A catalog playbook stub — implement safely in a later phase.
-# Must never be generated from Excel Remediation text or AI drafts.
-# Expected: Compress=yes
+# Phase 11C — real safe remediation playbook (catalog only).
+# task_code: JOURNALD_COMPRESS_ENABLE
+# Never generated from Excel Remediation text or AI drafts.
+#
+# What changes:
+#   - Ensures Compress=yes for systemd-journald
+#   - Prefer drop-in /etc/systemd/journald.conf.d/99-aiautomation.conf when supported
+#   - Otherwise safely edit /etc/systemd/journald.conf
+# Safety:
+#   - Backup before change
+#   - Restart systemd-journald only when configuration changed and not check-mode
+#   - Supports ansible check mode; idempotent
+# Rollback: manual — see docs/remediation-rollback.md
 
-- name: Enable journald Compress
+- name: Enable journald Compress=yes
   hosts: all
   become: true
-  serial: 20
-  gather_facts: false
+  serial: 1
+  gather_facts: true
+
+  vars:
+    journald_conf: /etc/systemd/journald.conf
+    journald_dropin_dir: /etc/systemd/journald.conf.d
+    journald_dropin_file: /etc/systemd/journald.conf.d/99-aiautomation.conf
+    journald_compress_line: "Compress=yes"
+
   tasks:
-    - name: Placeholder — not implemented
-      ansible.builtin.debug:
-        msg: "Playbook stub for JOURNALD_COMPRESS_ENABLE"
+    - name: Check for systemd directory (drop-in support)
+      ansible.builtin.stat:
+        path: /etc/systemd
+      register: systemd_dir
+
+    - name: Prefer journald drop-in when /etc/systemd exists
+      ansible.builtin.set_fact:
+        use_journald_dropin: "{{ systemd_dir.stat.exists | default(false) }}"
+
+    - name: Ensure journald drop-in directory exists
+      ansible.builtin.file:
+        path: "{{ journald_dropin_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when: use_journald_dropin | bool
+
+    - name: Stat existing journald drop-in
+      ansible.builtin.stat:
+        path: "{{ journald_dropin_file }}"
+      register: dropin_stat
+      when: use_journald_dropin | bool
+
+    - name: Backup existing journald drop-in before change
+      ansible.builtin.copy:
+        src: "{{ journald_dropin_file }}"
+        dest: "{{ journald_dropin_file }}.bak-{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        mode: "0644"
+      when:
+        - use_journald_dropin | bool
+        - dropin_stat.stat.exists | default(false)
+        - not ansible_check_mode
+
+    - name: Install journald Compress drop-in
+      ansible.builtin.copy:
+        dest: "{{ journald_dropin_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by AIAutomation catalog playbook JOURNALD_COMPRESS_ENABLE
+          # See docs/remediation-rollback.md for manual rollback
+          [Journal]
+          Compress=yes
+      register: dropin_result
+      when: use_journald_dropin | bool
+
+    - name: Ensure journald.conf exists for non-drop-in path
+      ansible.builtin.stat:
+        path: "{{ journald_conf }}"
+      register: journald_conf_stat
+      when: not (use_journald_dropin | bool)
+
+    - name: Fail if journald.conf missing and drop-in unsupported
+      ansible.builtin.fail:
+        msg: >-
+          Neither /etc/systemd (drop-in support) nor {{ journald_conf }}
+          is available on this host
+      when:
+        - not (use_journald_dropin | bool)
+        - not (journald_conf_stat.stat.exists | default(false))
+
+    - name: Backup journald.conf before change
+      ansible.builtin.copy:
+        src: "{{ journald_conf }}"
+        dest: "{{ journald_conf }}.bak-{{ ansible_date_time.iso8601_basic_short }}"
+        remote_src: true
+        mode: "0644"
+      when:
+        - not (use_journald_dropin | bool)
+        - not ansible_check_mode
+
+    - name: Set Compress=yes in journald.conf
+      ansible.builtin.lineinfile:
+        path: "{{ journald_conf }}"
+        regexp: '^#?\s*Compress\s*='
+        line: "{{ journald_compress_line }}"
+        insertafter: '^\[Journal\]'
+        backup: true
+      register: conf_lineinfile
+      when: not (use_journald_dropin | bool)
+
+    - name: Validate Compress=yes in managed drop-in
+      ansible.builtin.command:
+        cmd: grep -E '^Compress=yes' {{ journald_dropin_file }}
+      register: compress_validate_dropin
+      changed_when: false
+      when:
+        - use_journald_dropin | bool
+        - not ansible_check_mode
+
+    - name: Validate Compress=yes in journald.conf
+      ansible.builtin.command:
+        cmd: grep -E '^Compress=yes' {{ journald_conf }}
+      register: compress_validate_conf
+      changed_when: false
+      when:
+        - not (use_journald_dropin | bool)
+        - not ansible_check_mode
+
+    - name: Restart systemd-journald only when configuration changed
+      ansible.builtin.service:
+        name: systemd-journald
+        state: restarted
+      when:
+        - not ansible_check_mode
+        - >-
+          (dropin_result is defined and dropin_result is changed)
+          or (conf_lineinfile is defined and conf_lineinfile is changed)

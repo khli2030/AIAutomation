@@ -47,6 +47,8 @@ Internal on-prem platform for managing Linux compliance remediation via an exist
 
 ## Current status
 
+**Phase 11C available:** Next safe Linux remediation playbooks (`JOURNALD_COMPRESS_ENABLE`, `SHELL_TMOUT`, `CRONTAB_PERMISSIONS`, `CRON_DAILY_PERMISSIONS`) with backup/validation and manual rollback. Stub/high-risk playbooks stay blocked. See [`docs/23-phase11c-next-safe-remediation-playbooks.md`](docs/23-phase11c-next-safe-remediation-playbooks.md).
+
 **Phase 11B available:** SSH-delegated Ansible execution (`REAL_ANSIBLE_EXECUTION_MODE=ssh_delegate`) so a local app can run check-mode/ping on the INFRA-OPS control node via SSH BatchMode. Defaults still local/mock/disabled. See [`docs/22-phase11b-ssh-delegate-execution.md`](docs/22-phase11b-ssh-delegate-execution.md).
 
 **Phase 11A available:** Real safe SSH remediation playbooks (`SSH_MAX_AUTH_TRIES`, `SSH_LOG_LEVEL_INFO`, `SSH_CLIENT_ALIVE_INTERVAL`, `SSH_IGNORE_RHOSTS_ENABLE`) with backup/validate and manual rollback. Stub/high-risk playbooks stay blocked from real execution. See [`docs/21-phase11a-safe-remediation-playbooks.md`](docs/21-phase11a-safe-remediation-playbooks.md).
